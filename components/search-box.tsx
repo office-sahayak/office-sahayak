@@ -22,7 +22,7 @@ export function SearchBox({ value, onChange }: SearchBoxProps) {
           साफ़ करें
         </button>
       ) : (
-        <span className="pointer-events-none absolute right-4 top-1/2 hidden -translate-y-1/2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-bold text-slate-400 sm:block">24 टूल्स</span>
+        <span className="pointer-events-none absolute right-4 top-1/2 hidden -translate-y-1/2 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-bold text-slate-400 sm:block">25 टूल्स</span>
       )}
     </div>
   );

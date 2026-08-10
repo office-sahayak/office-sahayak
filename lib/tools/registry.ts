@@ -71,6 +71,17 @@ export const tools: Tool[] = [
     // \u0915\u0928\u094d\u0935\u0930\u094d\u091f, \u092c\u0926\u0932\u0947\u0902, xlsx = convert, badlen, xlsx
     keywords: ["\u0915\u0928\u094d\u0935\u0930\u094d\u091f", "\u092c\u0926\u0932\u0947\u0902", "xlsx"],
   },
+  {
+    slug: "hindi-krutidev-word",
+    // Hindi OCR \u0938\u0947 Kruti Dev = Hindi OCR se Kruti Dev
+    name: "Hindi OCR \u0938\u0947 Kruti Dev",
+    // PDF/JPEG \u0938\u0947 Kruti Dev Word \u092c\u0928\u093e\u090f\u0901 = PDF/JPEG se Kruti Dev Word banayen
+    description: "PDF/JPEG \u0938\u0947 Kruti Dev Word \u092c\u0928\u093e\u090f\u0901",
+    category: "documents",
+    icon: "\u0915\u0943",
+    status: "available",
+    keywords: ["Hindi OCR", "Kruti Dev", "\u0915\u0943\u0924\u093f\u0926\u0947\u0935", "JPEG", "Word"],
+  },
 
   // TEXT
   {

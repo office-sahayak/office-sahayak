@@ -53,7 +53,7 @@ export function HeroSection() {
             </div>
             <div className="mt-5 rounded-2xl bg-[#173f35] px-5 py-4 text-white">
               <p className="text-sm font-semibold text-white/70">जल्द उपलब्ध</p>
-              <p className="mt-1 font-bold">24 उपयोगी टूल्स की पूरी लाइब्रेरी</p>
+              <p className="mt-1 font-bold">25 उपयोगी टूल्स की पूरी लाइब्रेरी</p>
             </div>
           </div>
         </div>

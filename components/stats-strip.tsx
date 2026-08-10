@@ -1,5 +1,5 @@
 const stats = [
-  { value: "24", label: "उपयोगी टूल्स" },
+  { value: "25", label: "उपयोगी टूल्स" },
   { value: "6", label: "सरल श्रेणियाँ" },
   { value: "100%", label: "हिन्दी-अनुकूल" },
 ];
