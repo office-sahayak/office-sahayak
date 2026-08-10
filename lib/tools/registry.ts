@@ -73,14 +73,14 @@ export const tools: Tool[] = [
   },
   {
     slug: "hindi-krutidev-word",
-    // Hindi OCR \u0938\u0947 Kruti Dev = Hindi OCR se Kruti Dev
-    name: "Hindi OCR \u0938\u0947 Kruti Dev",
-    // PDF/JPEG \u0938\u0947 Kruti Dev Word \u092c\u0928\u093e\u090f\u0901 = PDF/JPEG se Kruti Dev Word banayen
-    description: "PDF/JPEG \u0938\u0947 Kruti Dev Word \u092c\u0928\u093e\u090f\u0901",
+    // Hindi OCR \u0938\u0947 Kruti/DevLys = Hindi OCR se Kruti/DevLys
+    name: "Hindi OCR \u0938\u0947 Kruti/DevLys",
+    // PDF/JPEG \u0938\u0947 editable legacy-font Word \u092c\u0928\u093e\u090f\u0901
+    description: "PDF/JPEG \u0938\u0947 Kruti Dev/DevLys Word \u092c\u0928\u093e\u090f\u0901",
     category: "documents",
     icon: "\u0915\u0943",
     status: "available",
-    keywords: ["Hindi OCR", "Kruti Dev", "\u0915\u0943\u0924\u093f\u0926\u0947\u0935", "JPEG", "Word"],
+    keywords: ["Hindi OCR", "Kruti Dev", "DevLys", "\u0915\u0943\u0924\u093f\u0926\u0947\u0935", "JPEG", "Word"],
   },
 
   // TEXT
