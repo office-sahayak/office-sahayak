@@ -31,7 +31,7 @@ export const tools: Tool[] = [
     description: "PDF \u0915\u094b \u0905\u0932\u0917-\u0905\u0932\u0917 \u092a\u0947\u091c\u094b\u0902 \u092e\u0947\u0902 \u092c\u093e\u0901\u091f\u0947\u0902",
     category: "documents",
     icon: "\u2702\uFE0F",
-    status: "coming-soon",
+    status: "available",
     // \u0938\u094d\u092a\u094d\u0932\u093f\u091f, \u092c\u093e\u0901\u091f\u0947\u0902, \u0905\u0932\u0917 = split, banten, alag
     keywords: ["\u0938\u094d\u092a\u094d\u0932\u093f\u091f", "\u092c\u093e\u0901\u091f\u0947\u0902", "\u0905\u0932\u0917"],
   },
