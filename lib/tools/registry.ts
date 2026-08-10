@@ -12,6 +12,17 @@ import type { Tool } from "./types";
 export const tools: Tool[] = [
   // DOCUMENTS
   {
+    slug: "hindi-krutidev-word",
+    // PDF/JPG \u0938\u0947 Editable Hindi Word = PDF/JPG se Editable Hindi Word
+    name: "PDF/JPG \u0938\u0947 Editable Hindi Word",
+    // Hindi PDF/JPG \u0938\u0947 editable Kruti Dev/DevLys Word \u092c\u0928\u093e\u090f\u0901
+    description: "Hindi PDF/JPG \u0938\u0947 editable Word file \u092c\u0928\u093e\u090f\u0901",
+    category: "documents",
+    icon: "\u0915\u0943",
+    status: "available",
+    keywords: ["Hindi OCR", "Kruti Dev", "DevLys", "\u0915\u0943\u0924\u093f\u0926\u0947\u0935", "JPEG", "Word", "editable"],
+  },
+  {
     slug: "pdf-merge",
     // PDF \u092e\u0930\u094d\u091c = PDF Merge
     name: "PDF \u092e\u0930\u094d\u091c",
@@ -71,18 +82,6 @@ export const tools: Tool[] = [
     // \u0915\u0928\u094d\u0935\u0930\u094d\u091f, \u092c\u0926\u0932\u0947\u0902, xlsx = convert, badlen, xlsx
     keywords: ["\u0915\u0928\u094d\u0935\u0930\u094d\u091f", "\u092c\u0926\u0932\u0947\u0902", "xlsx"],
   },
-  {
-    slug: "hindi-krutidev-word",
-    // Hindi OCR \u0938\u0947 Kruti/DevLys = Hindi OCR se Kruti/DevLys
-    name: "Hindi OCR \u0938\u0947 Kruti/DevLys",
-    // PDF/JPEG \u0938\u0947 editable legacy-font Word \u092c\u0928\u093e\u090f\u0901
-    description: "PDF/JPEG \u0938\u0947 Kruti Dev/DevLys Word \u092c\u0928\u093e\u090f\u0901",
-    category: "documents",
-    icon: "\u0915\u0943",
-    status: "available",
-    keywords: ["Hindi OCR", "Kruti Dev", "DevLys", "\u0915\u0943\u0924\u093f\u0926\u0947\u0935", "JPEG", "Word"],
-  },
-
   // TEXT
   {
     slug: "case-converter",
