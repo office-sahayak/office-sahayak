@@ -190,20 +190,20 @@ async function enhanceForOcr(source: Blob, printedTextOnly: boolean, optimizePho
 
 function normalizeListNumber(token: string) {
   const devanagariDigits = "०१२३४५६७८९";
-  let normalized = Array.from(token).map((character) => {
+  let normalized = Array.from(token.replace(/^।/, "")).map((character) => {
     const digit = devanagariDigits.indexOf(character);
     return digit >= 0 ? String(digit) : character;
   }).join("");
   normalized = normalized.replace(/[oO]/g, "0").replace(/[lI|]/g, "1");
   if (/^[aA][14]$/.test(normalized)) return 11;
-  normalized = normalized.replace(/^[zZsS]+|[zZsS]+$/g, "");
+  normalized = normalized.replace(/^[zZsSwW]+|[zZsSwW]+$/g, "");
   return /^\d{1,2}$/.test(normalized) ? Number(normalized) : null;
 }
 
 function repairOrderedListNumbers(text: string) {
   const lines = text.replace(/\r/g, "").split("\n");
   const candidates = lines.flatMap((line, lineIndex) => {
-    const match = line.match(/^(\s*)([0-9०-९oOlI|aAzZsS]{1,3})\s*[.,)।:-]*\s+(.+)$/);
+    const match = line.match(/^(\s*)([0-9०-९oOlI|aAzZsSwW।]{1,3})\s*[.,)।:-]*\s+(.+)$/);
     if (!match) return [];
     return [{ lineIndex, match, value: normalizeListNumber(match[2]) }];
   });
@@ -229,6 +229,44 @@ function repairOrderedListNumbers(text: string) {
     lines[candidate.lineIndex] = `${candidate.match[1]}${inferredStart + position}. ${candidate.match[3]}`;
   });
   return lines.join("\n");
+}
+
+interface PhotoTextBlock {
+  paragraphs: Array<{
+    lines: Array<{
+      words: Array<{ confidence: number; text: string }>;
+    }>;
+  }>;
+}
+
+function cleanPhotoRecognition(blocks: PhotoTextBlock[] | null, fallback: string) {
+  if (!blocks?.length) return fallback;
+  const paragraphs: string[] = [];
+
+  for (const block of blocks) {
+    for (const paragraph of block.paragraphs) {
+      const lines = paragraph.lines.flatMap((line) => {
+        const words = line.words.flatMap((word) => {
+          const token = word.text.trim();
+          if (!token) return [];
+          if (containsDevanagari(token)) return [token];
+          if (/[@]|https?:|www\./i.test(token)) return [token];
+          if (/^[।|]?[0-9०-९][0-9०-९.,:/()|-]*$/.test(token)) return [token];
+          if (/^[0-9०-९oOlI|aAzZsSwW]{1,3}[.,)।:-]*$/.test(token)) return [token];
+          if (/^(?:NCD|ICMIS|IOMIS|RTI|PDF|PAN|GST|IFSC)[.,:/()|-]*$/i.test(token)) return [token];
+          if (/^[A-Z]{2,10}[.,:/()|-]*$/.test(token)) return [token];
+          return word.confidence >= 70 ? [token] : [];
+        });
+        return words.length ? [words.join(" ")] : [];
+      });
+      if (lines.length) paragraphs.push(lines.join("\n"));
+    }
+  }
+
+  const cleaned = paragraphs.join("\n\n").trim();
+  const cleanedHindi = (cleaned.match(/[\u0900-\u097f]/g) ?? []).length;
+  const fallbackHindi = (fallback.match(/[\u0900-\u097f]/g) ?? []).length;
+  return cleaned && cleanedHindi >= fallbackHindi * 0.8 ? cleaned : fallback;
 }
 
 function saveBlob(blob: Blob, fileName: string) {
@@ -345,14 +383,16 @@ export function HindiKrutidevWorkspace() {
   const [isWorking, setIsWorking] = useState(false);
   const [printedTextOnly, setPrintedTextOnly] = useState(true);
   const [downloadMode, setDownloadMode] = useState<"kruti" | "devlys" | "both" | null>(null);
+  const [imageQualityWarning, setImageQualityWarning] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
-  const [status, setStatus] = useState("File चुनकर OCR शुरू करें।");
+  const [status, setStatus] = useState("File चुनकर Hindi text निकालें।");
   const [error, setError] = useState<string | null>(null);
 
   const totalCharacters = useMemo(() => pages.reduce((sum, page) => sum + page.text.length, 0), [pages]);
 
-  function chooseFile(selected: File) {
+  async function chooseFile(selected: File) {
     setError(null);
+    setImageQualityWarning(null);
     if (!isSupportedFile(selected)) {
       setError("केवल PDF, JPG, JPEG या PNG file चुनें।");
       return;
@@ -361,17 +401,33 @@ export function HindiKrutidevWorkspace() {
       setError("File का आकार 20 MB से कम रखें।");
       return;
     }
+
+    const isPdf = selected.type === "application/pdf" || selected.name.toLowerCase().endsWith(".pdf");
+    if (!isPdf) {
+      try {
+        const bitmap = await createImageBitmap(selected);
+        const isLowResolution = bitmap.width < 1200 || bitmap.height < 1600;
+        bitmap.close();
+        if (isLowResolution) {
+          setImageQualityWarning("यह photo कम resolution की है। सही Hindi text के लिए WhatsApp वाली compressed image की जगह original camera photo या Adobe Scan/Microsoft Lens से बनी PDF इस्तेमाल करें।");
+        }
+      } catch {
+        setImageQualityWarning("Photo की quality जाँची नहीं जा सकी। साफ़, सीधी और बिना shadow वाली image इस्तेमाल करें।");
+      }
+    }
+
     setFile(selected);
     setPages([]);
     setProgress(0);
-    setStatus("File तैयार है। अब Hindi OCR शुरू करें।");
+    setStatus("File तैयार है। अब Hindi text निकालें।");
   }
 
   function reset() {
     setFile(null);
     setPages([]);
+    setImageQualityWarning(null);
     setProgress(0);
-    setStatus("File चुनकर OCR शुरू करें।");
+    setStatus("File चुनकर Hindi text निकालें।");
     setError(null);
   }
 
@@ -394,7 +450,7 @@ export function HindiKrutidevWorkspace() {
         : await prepareImage(file);
 
       const { createWorker, OEM, PSM } = await import("tesseract.js");
-      setStatus("Hindi OCR engine पहली बार load हो रहा है…");
+      setStatus("Hindi पढ़ने की सुविधा पहली बार load हो रही है…");
       worker = await createWorker(["hin", "eng"], OEM.LSTM_ONLY, {
         logger: (message) => {
           if (message.status === "recognizing text") {
@@ -413,11 +469,14 @@ export function HindiKrutidevWorkspace() {
       for (let index = 0; index < prepared.length; index += 1) {
         setStatus(`Page ${index + 1}/${prepared.length} साफ़ करके Hindi text पढ़ा जा रहा है…`);
         const ocrImage = await enhanceForOcr(prepared[index].blob, printedTextOnly, !isPdf);
-        const result = await worker.recognize(ocrImage);
+        const result = await worker.recognize(ocrImage, {}, { blocks: !isPdf, text: true });
+        const extractedText = isPdf
+          ? result.data.text.trim()
+          : cleanPhotoRecognition(result.data.blocks, result.data.text.trim());
         recognized.push({
           height: prepared[index].height,
           png: prepared[index].png,
-          text: isPdf ? result.data.text.trim() : repairOrderedListNumbers(result.data.text.trim()),
+          text: isPdf ? extractedText : repairOrderedListNumbers(extractedText),
           width: prepared[index].width,
         });
         setProgress(15 + Math.round(((index + 1) / prepared.length) * 80));
@@ -425,10 +484,10 @@ export function HindiKrutidevWorkspace() {
 
       setPages(recognized);
       setProgress(100);
-      setStatus("OCR पूरा हुआ। Text जाँचकर Word download करें।");
+      setStatus("Hindi text तैयार है। गलतियाँ जाँचकर Word download करें।");
     } catch (caughtError) {
       setProgress(0);
-      setStatus("OCR पूरा नहीं हो सका।");
+      setStatus("Hindi text नहीं निकाला जा सका।");
       setError(caughtError instanceof Error ? caughtError.message : "File पढ़ते समय समस्या आई। दोबारा प्रयास करें।");
     } finally {
       if (worker) await worker.terminate().catch(() => undefined);
@@ -489,7 +548,7 @@ export function HindiKrutidevWorkspace() {
                 setError("एक बार में केवल एक file चुनें।");
                 return;
               }
-              chooseFile(dropped[0]);
+              void chooseFile(dropped[0]);
             }}
             className={`rounded-3xl border-2 border-dashed px-6 py-14 text-center transition sm:py-18 ${isDragging ? "border-[#2f6a59] bg-[#eaf4ef]" : "border-slate-300 bg-[#f8faf9] hover:border-[#7aa596]"}`}
           >
@@ -501,7 +560,7 @@ export function HindiKrutidevWorkspace() {
             </label>
             <input id="hindi-ocr-file" type="file" accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png" className="sr-only" onChange={(event) => {
               const selected = event.target.files?.[0];
-              if (selected) chooseFile(selected);
+              if (selected) void chooseFile(selected);
               event.target.value = "";
             }} />
             <p className="mt-4 text-xs font-medium text-slate-400">अधिकतम 20 MB • PDF में अधिकतम {MAX_PDF_PAGES} pages</p>
@@ -517,19 +576,25 @@ export function HindiKrutidevWorkspace() {
               <button type="button" onClick={reset} disabled={isWorking || Boolean(downloadMode)} className="rounded-full bg-white px-4 py-2 text-sm font-bold text-slate-600 shadow-sm hover:text-rose-700 disabled:opacity-50">बदलें</button>
             </div>
 
+            {imageQualityWarning && (
+              <p className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold leading-6 text-amber-900" role="status">
+                {imageQualityWarning}
+              </p>
+            )}
+
             {!pages.length && (
               <div className="mt-7 rounded-3xl border border-slate-200 bg-white p-5 sm:p-6">
                 <h2 className="text-xl font-black text-slate-950">Hindi text पहचानें</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-500">OCR आपके browser में चलेगा। पहली बार Hindi language data load होने में थोड़ा समय लग सकता है।</p>
+                <p className="mt-2 text-sm leading-6 text-slate-500">File आपके browser में ही पढ़ी जाएगी। पहली बार Hindi language data load होने में थोड़ा समय लग सकता है।</p>
                 <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
                   <input type="checkbox" checked={printedTextOnly} onChange={(event) => setPrintedTextOnly(event.target.checked)} disabled={isWorking} className="mt-1 size-4 accent-[#173f35]" />
                   <span>
                     <strong className="block text-sm text-emerald-950">सिर्फ साफ़ printed text पढ़ें</strong>
-                    <span className="mt-1 block text-xs leading-5 text-emerald-800">Blue signatures और coloured highlight को OCR से हटाता है। Handwritten text भी चाहिए तो इसे बंद करें।</span>
+                    <span className="mt-1 block text-xs leading-5 text-emerald-800">Blue signatures और coloured highlight को text से हटाता है। Handwritten text भी चाहिए तो इसे बंद करें।</span>
                   </span>
                 </label>
                 <button type="button" onClick={runOcr} disabled={isWorking} className="mt-5 inline-flex min-h-12 w-full items-center justify-center rounded-full bg-[#173f35] px-6 py-3 font-black text-white transition hover:bg-[#0f3028] disabled:cursor-not-allowed disabled:opacity-50">
-                  {isWorking ? "Hindi OCR चल रहा है…" : "Hindi OCR शुरू करें"}
+                  {isWorking ? "Hindi text निकाला जा रहा है…" : "Hindi text निकालें"}
                 </button>
               </div>
             )}
@@ -545,7 +610,7 @@ export function HindiKrutidevWorkspace() {
               <div className="mt-8">
                 <div className="flex flex-wrap items-end justify-between gap-3">
                   <div>
-                    <p className="text-sm font-extrabold uppercase tracking-[0.14em] text-[#b4552d]">OCR परिणाम</p>
+                    <p className="text-sm font-extrabold uppercase tracking-[0.14em] text-[#b4552d]">निकला हुआ text</p>
                     <h2 className="mt-1 text-2xl font-black text-slate-950">Text जाँचें और सुधारें</h2>
                   </div>
                   <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">{pages.length} pages • {totalCharacters} अक्षर</span>
@@ -585,7 +650,7 @@ export function HindiKrutidevWorkspace() {
         <div className="rounded-3xl bg-[#173f35] p-6 text-white">
           <span className="text-3xl" aria-hidden="true">🔒</span>
           <h2 className="mt-4 text-xl font-black">File पूरी तरह निजी</h2>
-          <p className="mt-2 text-sm leading-6 text-white/70">PDF या फोटो किसी server या MeshAPI पर upload नहीं होती। OCR आपके browser में चलता है।</p>
+          <p className="mt-2 text-sm leading-6 text-white/70">PDF या फोटो किसी server या MeshAPI पर upload नहीं होती। File आपके browser में ही पढ़ी जाती है।</p>
         </div>
         <div className="rounded-3xl border border-slate-200 bg-white p-6">
           <h2 className="text-lg font-black text-slate-950">दो editable Word files</h2>
