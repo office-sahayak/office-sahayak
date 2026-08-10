@@ -11,6 +11,6 @@ export const siteConfig = {
   description: "\u0906\u092a\u0915\u0947 \u0915\u093e\u092e \u0915\u0947 \u0932\u093f\u090f \u092e\u0941\u092b\u094d\u0924 \u0911\u0928\u0932\u093e\u0907\u0928 \u091f\u0942\u0932\u094d\u0938",
   url: "https://officesahayak.com",
   links: {
-    github: "https://github.com/yourusername/office-sahayak",
+    github: "https://github.com/office-sahayak/office-sahayak",
   },
 } as const;
