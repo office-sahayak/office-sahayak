@@ -61,6 +61,8 @@ async function prepareImage(file: File) {
   canvas.height = Math.max(1, Math.round(bitmap.height * scale));
   const context = canvas.getContext("2d");
   if (!context) throw new Error("चित्र पढ़ा नहीं जा सका।");
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
   context.fillStyle = "#ffffff";
   context.fillRect(0, 0, canvas.width, canvas.height);
   context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
@@ -116,14 +118,17 @@ function histogramPoint(histogram: Uint32Array, target: number) {
   return 255;
 }
 
-async function enhanceForOcr(source: Blob, printedTextOnly: boolean) {
+async function enhanceForOcr(source: Blob, printedTextOnly: boolean, optimizePhoto = false) {
   const bitmap = await createImageBitmap(source);
+  const photoScale = optimizePhoto ? Math.min(3, 2800 / Math.max(bitmap.width, bitmap.height)) : 1;
   const canvas = document.createElement("canvas");
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
+  canvas.width = Math.max(1, Math.round(bitmap.width * photoScale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * photoScale));
   const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) throw new Error("OCR के लिए page साफ़ नहीं हो सका।");
-  context.drawImage(bitmap, 0, 0);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
   bitmap.close();
 
   const image = context.getImageData(0, 0, canvas.width, canvas.height);
@@ -160,6 +165,48 @@ async function enhanceForOcr(source: Blob, printedTextOnly: boolean) {
   return canvasToBlob(canvas);
 }
 
+function normalizeListNumber(token: string) {
+  const devanagariDigits = "०१२३४५६७८९";
+  let normalized = Array.from(token).map((character) => {
+    const digit = devanagariDigits.indexOf(character);
+    return digit >= 0 ? String(digit) : character;
+  }).join("");
+  normalized = normalized.replace(/[oO]/g, "0").replace(/[lI|]/g, "1");
+  if (/^[aA][14]$/.test(normalized)) return 11;
+  return /^\d{1,2}$/.test(normalized) ? Number(normalized) : null;
+}
+
+function repairOrderedListNumbers(text: string) {
+  const lines = text.replace(/\r/g, "").split("\n");
+  const candidates = lines.flatMap((line, lineIndex) => {
+    const match = line.match(/^(\s*)([0-9०-९oOlI|aA]{1,3})\s*[.,)।:-]+\s*(.+)$/);
+    if (!match) return [];
+    return [{ lineIndex, match, value: normalizeListNumber(match[2]) }];
+  });
+
+  const groups: typeof candidates[] = [];
+  for (const candidate of candidates) {
+    const current = groups.at(-1);
+    if (!current || candidate.lineIndex - current.at(-1)!.lineIndex > 4) groups.push([candidate]);
+    else current.push(candidate);
+  }
+  const group = groups.sort((left, right) => right.length - left.length)[0];
+  if (!group || group.length < 6) return text;
+
+  const startOffsets = group.flatMap((candidate, position) => (
+    candidate.value && candidate.value <= 9 ? [candidate.value - position] : []
+  )).sort((left, right) => left - right);
+  if (startOffsets.length < 4) return text;
+  const inferredStart = startOffsets[Math.floor(startOffsets.length / 2)];
+  const consistentOffsets = startOffsets.filter((offset) => Math.abs(offset - inferredStart) <= 1);
+  if (inferredStart < 1 || inferredStart > 50 || consistentOffsets.length < 4) return text;
+
+  group.forEach((candidate, position) => {
+    lines[candidate.lineIndex] = `${candidate.match[1]}${inferredStart + position}. ${candidate.match[3]}`;
+  });
+  return lines.join("\n");
+}
+
 function saveBlob(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -171,7 +218,7 @@ function saveBlob(blob: Blob, fileName: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-async function createEditableWord(pages: RecognizedPage[]) {
+async function createEditableWord(pages: RecognizedPage[], compact = false) {
   const { Document, Packer, Paragraph, SectionType, TextRun } = await import("docx");
   const sections = pages.map((page, pageIndex) => {
     const lines = page.text.replace(/\r/g, "").split("\n");
@@ -182,14 +229,17 @@ async function createEditableWord(pages: RecognizedPage[]) {
         return new TextRun({
           text: isHindi ? unicodeToKrutiDev(part) : part,
           font: isHindi ? "Kruti Dev 010" : "Arial",
-          size: isHindi ? 28 : 22,
+          size: isHindi ? (compact ? 24 : 28) : (compact ? 20 : 22),
         });
       });
-      return new Paragraph({ children: runs, spacing: { after: 80, line: 340 } });
+      return new Paragraph({ children: runs, spacing: { after: compact ? 0 : 80, line: compact ? 260 : 340 } });
     });
 
     return {
-      properties: pageIndex ? { type: SectionType.NEXT_PAGE } : {},
+      properties: {
+        type: pageIndex ? SectionType.NEXT_PAGE : undefined,
+        page: compact ? { margin: { top: 360, right: 360, bottom: 360, left: 360 } } : undefined,
+      },
       children: children.length ? children : [new Paragraph({ text: "" })],
     };
   });
@@ -290,7 +340,8 @@ export function HindiKrutidevWorkspace() {
 
     let worker: Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>> | null = null;
     try {
-      const prepared = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")
+      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+      const prepared = isPdf
         ? await preparePdf(file, (page, total) => {
             setProgress(Math.round((page / total) * 12));
             setStatus(`PDF page ${page}/${total} तैयार हो रहा है…`);
@@ -309,19 +360,19 @@ export function HindiKrutidevWorkspace() {
       });
       await worker.setParameters({
         preserve_interword_spaces: "1",
-        tessedit_pageseg_mode: PSM.AUTO,
+        tessedit_pageseg_mode: isPdf ? PSM.AUTO : PSM.SINGLE_BLOCK,
         user_defined_dpi: "300",
       });
 
       const recognized: RecognizedPage[] = [];
       for (let index = 0; index < prepared.length; index += 1) {
         setStatus(`Page ${index + 1}/${prepared.length} साफ़ करके Hindi text पढ़ा जा रहा है…`);
-        const ocrImage = await enhanceForOcr(prepared[index].blob, printedTextOnly);
+        const ocrImage = await enhanceForOcr(prepared[index].blob, printedTextOnly, !isPdf);
         const result = await worker.recognize(ocrImage);
         recognized.push({
           height: prepared[index].height,
           png: prepared[index].png,
-          text: result.data.text.trim(),
+          text: isPdf ? result.data.text.trim() : repairOrderedListNumbers(result.data.text.trim()),
           width: prepared[index].width,
         });
         setProgress(15 + Math.round(((index + 1) / prepared.length) * 80));
@@ -349,14 +400,15 @@ export function HindiKrutidevWorkspace() {
     setDownloadMode(type);
     setError(null);
     try {
+      const compact = file ? !(file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) : false;
       if (type === "editable") {
-        saveBlob(await createEditableWord(pages), "office-sahayak-krutidev-editable.docx");
+        saveBlob(await createEditableWord(pages, compact), "office-sahayak-krutidev-editable.docx");
       } else if (type === "layout") {
         saveBlob(await createLayoutWord(pages), "office-sahayak-original-layout.docx");
       } else {
         const [{ default: JSZip }, editable, layout] = await Promise.all([
           import("jszip"),
-          createEditableWord(pages),
+          createEditableWord(pages, compact),
           createLayoutWord(pages),
         ]);
         const zip = new JSZip();
@@ -499,7 +551,7 @@ export function HindiKrutidevWorkspace() {
         </div>
         <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5 text-sm leading-6 text-amber-900">
           <strong className="block">Kruti Dev font ज़रूरी है</strong>
-          Editable Word सही दिखाने के लिए कंप्यूटर में <strong>Kruti Dev 010</strong> font installed होना चाहिए। धुंधली scan में OCR text सुधारना पड़ सकता है।
+          Editable file को <strong>Desktop Microsoft Word</strong> में खोलें और कंप्यूटर में <strong>Kruti Dev 010</strong> font installed रखें। Word Online में यह font सही नहीं दिख सकता।
         </div>
       </aside>
     </div>
