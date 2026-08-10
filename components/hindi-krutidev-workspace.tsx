@@ -21,6 +21,8 @@ interface RecognizedPage {
   width: number;
 }
 
+type LegacyFontName = "Kruti Dev 010" | "DevLys 010";
+
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -152,9 +154,30 @@ async function enhanceForOcr(source: Blob, printedTextOnly: boolean, optimizePho
   const blackPoint = histogramPoint(histogram, total * 0.005);
   const whitePoint = Math.max(blackPoint + 1, histogramPoint(histogram, total * 0.995));
 
-  for (let offset = 0, pixel = 0; offset < pixels.length; offset += 4, pixel += 1) {
+  const enhancedGrayscale = new Uint8Array(total);
+  for (let pixel = 0; pixel < grayscale.length; pixel += 1) {
     const normalized = Math.min(1, Math.max(0, (grayscale[pixel] - blackPoint) / (whitePoint - blackPoint)));
-    const enhanced = Math.round(255 * Math.pow(normalized, 1.3));
+    enhancedGrayscale[pixel] = Math.round(255 * Math.pow(normalized, 1.3));
+  }
+
+  const outputGrayscale = optimizePhoto ? new Uint8Array(enhancedGrayscale) : enhancedGrayscale;
+  if (optimizePhoto && canvas.width > 2 && canvas.height > 2) {
+    for (let row = 1; row < canvas.height - 1; row += 1) {
+      for (let column = 1; column < canvas.width - 1; column += 1) {
+        const pixel = row * canvas.width + column;
+        const neighbourAverage = (
+          enhancedGrayscale[pixel - canvas.width]
+          + enhancedGrayscale[pixel + canvas.width]
+          + enhancedGrayscale[pixel - 1]
+          + enhancedGrayscale[pixel + 1]
+        ) / 4;
+        outputGrayscale[pixel] = Math.round(Math.min(255, Math.max(0, enhancedGrayscale[pixel] * 1.65 - neighbourAverage * 0.65)));
+      }
+    }
+  }
+
+  for (let offset = 0, pixel = 0; offset < pixels.length; offset += 4, pixel += 1) {
+    const enhanced = outputGrayscale[pixel];
     pixels[offset] = enhanced;
     pixels[offset + 1] = enhanced;
     pixels[offset + 2] = enhanced;
@@ -173,13 +196,14 @@ function normalizeListNumber(token: string) {
   }).join("");
   normalized = normalized.replace(/[oO]/g, "0").replace(/[lI|]/g, "1");
   if (/^[aA][14]$/.test(normalized)) return 11;
+  normalized = normalized.replace(/^[zZsS]+|[zZsS]+$/g, "");
   return /^\d{1,2}$/.test(normalized) ? Number(normalized) : null;
 }
 
 function repairOrderedListNumbers(text: string) {
   const lines = text.replace(/\r/g, "").split("\n");
   const candidates = lines.flatMap((line, lineIndex) => {
-    const match = line.match(/^(\s*)([0-9०-९oOlI|aA]{1,3})\s*[.,)।:-]+\s*(.+)$/);
+    const match = line.match(/^(\s*)([0-9०-९oOlI|aAzZsS]{1,3})\s*[.,)।:-]*\s+(.+)$/);
     if (!match) return [];
     return [{ lineIndex, match, value: normalizeListNumber(match[2]) }];
   });
@@ -218,27 +242,89 @@ function saveBlob(blob: Blob, fileName: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-async function createEditableWord(pages: RecognizedPage[], compact = false) {
-  const { Document, Packer, Paragraph, SectionType, TextRun } = await import("docx");
+function groupEditableParagraphs(text: string) {
+  const paragraphs: Array<{ isNumbered: boolean; text: string }> = [];
+  let buffer: string[] = [];
+  let bufferIsNumbered = false;
+
+  function flush() {
+    if (!buffer.length) return;
+    paragraphs.push({ isNumbered: bufferIsNumbered, text: buffer.join(" ") });
+    buffer = [];
+    bufferIsNumbered = false;
+  }
+
+  for (const sourceLine of text.replace(/\r/g, "").split("\n")) {
+    const line = sourceLine.trim();
+    if (!line) {
+      flush();
+      if (paragraphs.at(-1)?.text) paragraphs.push({ isNumbered: false, text: "" });
+      continue;
+    }
+
+    const isNumberedLine = /^[0-9०-९]{1,3}\s*[.,)।:-]+/.test(line);
+    const endsParagraph = /[।|.!?;:]$/.test(line);
+    const isShortLine = line.length < 45;
+
+    if (isNumberedLine) {
+      flush();
+      buffer = [line];
+      bufferIsNumbered = true;
+      if (endsParagraph) flush();
+      continue;
+    }
+
+    if (buffer.length) {
+      buffer.push(line);
+      if (endsParagraph || isShortLine) flush();
+      continue;
+    }
+
+    if (isShortLine) {
+      paragraphs.push({ isNumbered: false, text: line });
+      continue;
+    }
+
+    buffer = [line];
+    if (endsParagraph) flush();
+  }
+
+  flush();
+  return paragraphs;
+}
+
+async function createEditableWord(pages: RecognizedPage[], legacyFont: LegacyFontName, compact = false) {
+  const { AlignmentType, Document, Packer, Paragraph, SectionType, TextRun } = await import("docx");
   const sections = pages.map((page, pageIndex) => {
-    const lines = page.text.replace(/\r/g, "").split("\n");
-    const children = lines.map((line) => {
-      if (!line) return new Paragraph({ text: "" });
-      const runs = line.split(/(\s+)/).filter(Boolean).map((part) => {
+    const editableParagraphs = groupEditableParagraphs(page.text);
+    const children = editableParagraphs.map((paragraph) => {
+      if (!paragraph.text) return new Paragraph({ text: "" });
+      const shouldJustify = paragraph.text.length >= 60;
+      const runs = paragraph.text.split(/(\s+)/).filter(Boolean).map((part) => {
         const isHindi = containsDevanagari(part);
         return new TextRun({
           text: isHindi ? unicodeToKrutiDev(part) : part,
-          font: isHindi ? "Kruti Dev 010" : "Arial",
+          font: isHindi ? legacyFont : "Arial",
           size: isHindi ? (compact ? 24 : 28) : (compact ? 20 : 22),
         });
       });
-      return new Paragraph({ children: runs, spacing: { after: compact ? 0 : 80, line: compact ? 260 : 340 } });
+      return new Paragraph({
+        alignment: shouldJustify ? AlignmentType.JUSTIFIED : AlignmentType.LEFT,
+        children: runs,
+        indent: paragraph.isNumbered ? { hanging: 360, left: 360 } : undefined,
+        spacing: { after: compact ? 0 : 60, line: compact ? 260 : 300 },
+      });
     });
 
     return {
       properties: {
         type: pageIndex ? SectionType.NEXT_PAGE : undefined,
-        page: compact ? { margin: { top: 360, right: 360, bottom: 360, left: 360 } } : undefined,
+        page: {
+          size: { width: 11906, height: 16838 },
+          margin: compact
+            ? { top: 360, right: 360, bottom: 360, left: 360 }
+            : { top: 720, right: 720, bottom: 720, left: 720 },
+        },
       },
       children: children.length ? children : [new Paragraph({ text: "" })],
     };
@@ -246,48 +332,7 @@ async function createEditableWord(pages: RecognizedPage[], compact = false) {
 
   const documentFile = new Document({
     creator: "Office Sahayak",
-    description: "Hindi OCR text converted for Kruti Dev 010",
-    sections,
-  });
-  return Packer.toBlob(documentFile);
-}
-
-async function createLayoutWord(pages: RecognizedPage[]) {
-  const { AlignmentType, Document, ImageRun, Packer, PageOrientation, Paragraph, SectionType } = await import("docx");
-  const sections = pages.map((page, pageIndex) => {
-    const landscape = page.width > page.height;
-    const maxWidth = landscape ? 1010 : 740;
-    const maxHeight = landscape ? 700 : 1040;
-    const scale = Math.min(maxWidth / page.width, maxHeight / page.height);
-    const image = new ImageRun({
-      type: "png",
-      data: page.png,
-      transformation: {
-        width: Math.max(1, Math.round(page.width * scale)),
-        height: Math.max(1, Math.round(page.height * scale)),
-      },
-      altText: {
-        title: `Original page ${pageIndex + 1}`,
-        description: `Uploaded document page ${pageIndex + 1}`,
-        name: `page-${pageIndex + 1}.png`,
-      },
-    });
-
-    return {
-      properties: {
-        type: pageIndex ? SectionType.NEXT_PAGE : undefined,
-        page: {
-          size: { orientation: landscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
-          margin: { top: 240, right: 240, bottom: 240, left: 240 },
-        },
-      },
-      children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [image], spacing: { after: 0, before: 0 } })],
-    };
-  });
-
-  const documentFile = new Document({
-    creator: "Office Sahayak",
-    description: "Original document layout preserved as page images",
+    description: `Hindi OCR text converted for ${legacyFont}`,
     sections,
   });
   return Packer.toBlob(documentFile);
@@ -299,7 +344,7 @@ export function HindiKrutidevWorkspace() {
   const [isDragging, setIsDragging] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
   const [printedTextOnly, setPrintedTextOnly] = useState(true);
-  const [downloadMode, setDownloadMode] = useState<"editable" | "layout" | "both" | null>(null);
+  const [downloadMode, setDownloadMode] = useState<"kruti" | "devlys" | "both" | null>(null);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("File चुनकर OCR शुरू करें।");
   const [error, setError] = useState<string | null>(null);
@@ -395,26 +440,26 @@ export function HindiKrutidevWorkspace() {
     setPages((current) => current.map((page, pageIndex) => (pageIndex === index ? { ...page, text } : page)));
   }
 
-  async function download(type: "editable" | "layout" | "both") {
+  async function download(type: "kruti" | "devlys" | "both") {
     if (!pages.length) return;
     setDownloadMode(type);
     setError(null);
     try {
       const compact = file ? !(file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) : false;
-      if (type === "editable") {
-        saveBlob(await createEditableWord(pages, compact), "office-sahayak-krutidev-editable.docx");
-      } else if (type === "layout") {
-        saveBlob(await createLayoutWord(pages), "office-sahayak-original-layout.docx");
+      if (type === "kruti") {
+        saveBlob(await createEditableWord(pages, "Kruti Dev 010", compact), "office-sahayak-krutidev-010.docx");
+      } else if (type === "devlys") {
+        saveBlob(await createEditableWord(pages, "DevLys 010", compact), "office-sahayak-devlys-010.docx");
       } else {
-        const [{ default: JSZip }, editable, layout] = await Promise.all([
+        const [{ default: JSZip }, krutiDev, devLys] = await Promise.all([
           import("jszip"),
-          createEditableWord(pages, compact),
-          createLayoutWord(pages),
+          createEditableWord(pages, "Kruti Dev 010", compact),
+          createEditableWord(pages, "DevLys 010", compact),
         ]);
         const zip = new JSZip();
-        zip.file("krutidev-editable.docx", editable);
-        zip.file("original-layout.docx", layout);
-        saveBlob(await zip.generateAsync({ type: "blob" }), "office-sahayak-word-files.zip");
+        zip.file("krutidev-010-editable.docx", krutiDev);
+        zip.file("devlys-010-editable.docx", devLys);
+        saveBlob(await zip.generateAsync({ type: "blob" }), "office-sahayak-hindi-font-word-files.zip");
       }
     } catch {
       setError("Word file बनाते समय समस्या आई। कृपया दोबारा प्रयास करें।");
@@ -516,17 +561,17 @@ export function HindiKrutidevWorkspace() {
                 </div>
 
                 <div className="mt-6 grid gap-3 sm:grid-cols-2">
-                  <button type="button" onClick={() => download("editable")} disabled={Boolean(downloadMode)} className="rounded-2xl bg-[#173f35] px-5 py-4 text-left font-black text-white disabled:opacity-50">
-                    <span className="block text-lg">Editable Kruti Dev Word</span>
-                    <span className="mt-1 block text-xs font-semibold text-white/65">{downloadMode === "editable" ? "बन रही है…" : "Text बदल और edit कर पाएँगे"}</span>
+                  <button type="button" onClick={() => download("kruti")} disabled={Boolean(downloadMode)} className="rounded-2xl bg-[#173f35] px-5 py-4 text-left font-black text-white disabled:opacity-50">
+                    <span className="block text-lg">Kruti Dev 010 Word</span>
+                    <span className="mt-1 block text-xs font-semibold text-white/65">{downloadMode === "kruti" ? "बन रही है…" : "Editable • Justified paragraphs"}</span>
                   </button>
-                  <button type="button" onClick={() => download("layout")} disabled={Boolean(downloadMode)} className="rounded-2xl border border-slate-300 bg-white px-5 py-4 text-left font-black text-slate-950 disabled:opacity-50">
-                    <span className="block text-lg">Original Layout Word</span>
-                    <span className="mt-1 block text-xs font-semibold text-slate-500">{downloadMode === "layout" ? "बन रही है…" : "हर page का रूप वैसा ही रहेगा"}</span>
+                  <button type="button" onClick={() => download("devlys")} disabled={Boolean(downloadMode)} className="rounded-2xl border border-slate-300 bg-white px-5 py-4 text-left font-black text-slate-950 disabled:opacity-50">
+                    <span className="block text-lg">DevLys 010 Word</span>
+                    <span className="mt-1 block text-xs font-semibold text-slate-500">{downloadMode === "devlys" ? "बन रही है…" : "Editable • Justified paragraphs"}</span>
                   </button>
                 </div>
                 <button type="button" onClick={() => download("both")} disabled={Boolean(downloadMode)} className="mt-3 inline-flex min-h-12 w-full items-center justify-center rounded-full bg-[#b4552d] px-6 py-3 font-black text-white transition hover:bg-[#964322] disabled:opacity-50">
-                  {downloadMode === "both" ? "दोनों files की ZIP बन रही है…" : "दोनों Word files डाउनलोड करें"}
+                  {downloadMode === "both" ? "दोनों editable files की ZIP बन रही है…" : "Kruti Dev + DevLys दोनों डाउनलोड करें"}
                 </button>
               </div>
             )}
@@ -543,15 +588,15 @@ export function HindiKrutidevWorkspace() {
           <p className="mt-2 text-sm leading-6 text-white/70">PDF या फोटो किसी server या MeshAPI पर upload नहीं होती। OCR आपके browser में चलता है।</p>
         </div>
         <div className="rounded-3xl border border-slate-200 bg-white p-6">
-          <h2 className="text-lg font-black text-slate-950">दो Word files</h2>
+          <h2 className="text-lg font-black text-slate-950">दो editable Word files</h2>
           <div className="mt-5 space-y-4 text-sm text-slate-600">
-            <div className="flex gap-3"><span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#e7f3ee] text-xs font-black text-[#173f35]">1</span><span className="pt-1 leading-5">Kruti Dev 010 में editable Hindi text</span></div>
-            <div className="flex gap-3"><span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#e7f3ee] text-xs font-black text-[#173f35]">2</span><span className="pt-1 leading-5">Original page layout वाला Word</span></div>
+            <div className="flex gap-3"><span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#e7f3ee] text-xs font-black text-[#173f35]">1</span><span className="pt-1 leading-5">Kruti Dev 010 में justified Hindi text</span></div>
+            <div className="flex gap-3"><span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#e7f3ee] text-xs font-black text-[#173f35]">2</span><span className="pt-1 leading-5">DevLys 010 में वही editable text</span></div>
           </div>
         </div>
         <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5 text-sm leading-6 text-amber-900">
-          <strong className="block">Kruti Dev font ज़रूरी है</strong>
-          Editable file को <strong>Desktop Microsoft Word</strong> में खोलें और कंप्यूटर में <strong>Kruti Dev 010</strong> font installed रखें। Word Online में यह font सही नहीं दिख सकता।
+          <strong className="block">दोनों fonts installed रखें</strong>
+          Files को <strong>Desktop Microsoft Word</strong> में खोलें। कंप्यूटर में <strong>Kruti Dev 010</strong> और <strong>DevLys 010</strong> font installed होना चाहिए; Word Online में ये सही नहीं दिख सकते।
         </div>
       </aside>
     </div>
