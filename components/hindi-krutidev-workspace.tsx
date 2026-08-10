@@ -7,17 +7,27 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_PDF_PAGES = 10;
 const PDF_WORKER_URL = "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.worker.min.mjs";
 
+interface NumericHint {
+  bbox: { x0: number; x1: number; y0: number; y1: number };
+  priority: number;
+  text: string;
+}
+
 interface PreparedPage {
   blob: Blob;
+  embeddedText: string | null;
   height: number;
+  numberHints: NumericHint[];
   png: Uint8Array;
   width: number;
 }
 
 interface RecognizedPage {
   height: number;
+  numericCorrections: number;
   png: Uint8Array;
   text: string;
+  uncertainNumbers: number;
   width: number;
 }
 
@@ -43,7 +53,9 @@ function canvasToPng(canvas: HTMLCanvasElement) {
       try {
         resolve({
           blob,
+          embeddedText: null,
           height: canvas.height,
+          numberHints: [],
           png: new Uint8Array(await blob.arrayBuffer()),
           width: canvas.width,
         });
@@ -52,6 +64,55 @@ function canvasToPng(canvas: HTMLCanvasElement) {
       }
     }, "image/png");
   });
+}
+
+interface PdfTextItem {
+  hasEOL?: boolean;
+  height: number;
+  str: string;
+  transform: number[];
+  width: number;
+}
+
+function reliableEmbeddedHindiText(text: string) {
+  const devanagari = (text.match(/[\u0900-\u097f]/g) ?? []).length;
+  const letters = (text.match(/[A-Za-z\u0900-\u097f]/g) ?? []).length;
+  return devanagari >= 20 && devanagari / Math.max(1, letters) >= 0.45;
+}
+
+function embeddedPageText(items: PdfTextItem[]) {
+  return items.map((item) => `${item.str}${item.hasEOL ? "\n" : " "}`).join("").replace(/[ \t]+\n/g, "\n").trim();
+}
+
+function embeddedNumberHints(
+  items: PdfTextItem[],
+  scale: number,
+  transform: (left: number[], right: number[]) => number[],
+  viewportTransform: number[],
+) {
+  const hints: NumericHint[] = [];
+  for (const item of items) {
+    if (!/[0-9\u0966-\u096f]/.test(item.str)) continue;
+    const device = transform(viewportTransform, item.transform);
+    const sourceWidth = Math.max(1, item.width * scale);
+    const sourceHeight = Math.max(8, Math.abs(device[3]), item.height * scale);
+    const expression = /[0-9\u0966-\u096f]+/g;
+    for (const match of item.str.matchAll(expression)) {
+      const start = match.index ?? 0;
+      const end = start + match[0].length;
+      hints.push({
+        bbox: {
+          x0: device[4] + sourceWidth * (start / Math.max(1, item.str.length)),
+          x1: device[4] + sourceWidth * (end / Math.max(1, item.str.length)),
+          y0: device[5] - sourceHeight * 1.15,
+          y1: device[5] + sourceHeight * 0.25,
+        },
+        priority: 100,
+        text: match[0],
+      });
+    }
+  }
+  return hints;
 }
 
 async function prepareImage(file: File) {
@@ -88,13 +149,26 @@ async function preparePdf(file: File, onPage: (page: number, total: number) => v
     onPage(pageNumber, pdf.numPages);
     const page = await pdf.getPage(pageNumber);
     const original = page.getViewport({ scale: 1 });
-    const scale = Math.min(3.5, 2200 / original.width);
+    const scale = Math.min(4.25, 2600 / original.width);
     const viewport = page.getViewport({ scale });
+    const textContent = await page.getTextContent();
+    const textItems = textContent.items.filter((item): item is typeof item & PdfTextItem => (
+      "str" in item && typeof item.str === "string" && Array.isArray(item.transform)
+    ));
+    const hiddenText = embeddedPageText(textItems);
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(viewport.width);
     canvas.height = Math.ceil(viewport.height);
     await page.render({ canvas, viewport, background: "#ffffff" }).promise;
-    pages.push(await canvasToPng(canvas));
+    const preparedPage = await canvasToPng(canvas);
+    preparedPage.embeddedText = reliableEmbeddedHindiText(hiddenText) ? hiddenText : null;
+    preparedPage.numberHints = embeddedNumberHints(
+      textItems,
+      scale,
+      pdfjs.Util.transform,
+      Array.from(viewport.transform),
+    );
+    pages.push(preparedPage);
     page.cleanup();
   }
 
@@ -122,7 +196,7 @@ function histogramPoint(histogram: Uint32Array, target: number) {
 
 async function enhanceForOcr(source: Blob, printedTextOnly: boolean, optimizePhoto = false) {
   const bitmap = await createImageBitmap(source);
-  const photoScale = optimizePhoto ? Math.min(3, 2800 / Math.max(bitmap.width, bitmap.height)) : 1;
+  const photoScale = optimizePhoto ? Math.max(1, Math.min(3, 2800 / Math.max(bitmap.width, bitmap.height))) : 1;
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(bitmap.width * photoScale));
   canvas.height = Math.max(1, Math.round(bitmap.height * photoScale));
@@ -231,12 +305,230 @@ function repairOrderedListNumbers(text: string) {
   return lines.join("\n");
 }
 
+interface OcrBbox {
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+}
+
+interface PhotoTextWord {
+  bbox: OcrBbox;
+  confidence: number;
+  text: string;
+}
+
 interface PhotoTextBlock {
   paragraphs: Array<{
     lines: Array<{
-      words: Array<{ confidence: number; text: string }>;
+      bbox: OcrBbox;
+      words: PhotoTextWord[];
     }>;
   }>;
+}
+
+const NUMERIC_FRAGMENT = /[0-9\u0966-\u096fOoIl|\[\]]+/g;
+
+function digitGroups(text: string) {
+  return Array.from(text.matchAll(NUMERIC_FRAGMENT)).filter((match) => /[0-9\u0966-\u096f]/.test(match[0]));
+}
+
+function asciiDigits(text: string) {
+  const devanagariDigits = "\u0966\u0967\u0968\u0969\u096a\u096b\u096c\u096d\u096e\u096f";
+  return Array.from(text).map((character) => {
+    const devanagari = devanagariDigits.indexOf(character);
+    if (devanagari >= 0) return String(devanagari);
+    if (/[oO]/.test(character)) return "0";
+    if (/[Il|\[\]]/.test(character)) return "1";
+    return character;
+  }).join("").replace(/\D/g, "");
+}
+
+function center(bbox: OcrBbox) {
+  return { x: (bbox.x0 + bbox.x1) / 2, y: (bbox.y0 + bbox.y1) / 2 };
+}
+
+function overlapRatio(first: OcrBbox, second: OcrBbox) {
+  const overlap = Math.max(0, Math.min(first.y1, second.y1) - Math.max(first.y0, second.y0));
+  return overlap / Math.max(1, Math.min(first.y1 - first.y0, second.y1 - second.y0));
+}
+
+function approximateFragmentBbox(word: PhotoTextWord, start: number, length: number) {
+  const width = word.bbox.x1 - word.bbox.x0;
+  const sourceLength = Math.max(1, word.text.length);
+  return {
+    x0: word.bbox.x0 + width * (start / sourceLength),
+    x1: word.bbox.x0 + width * ((start + length) / sourceLength),
+    y0: word.bbox.y0,
+    y1: word.bbox.y1,
+  };
+}
+
+function applyEmbeddedNumberHints(blocks: PhotoTextBlock[], hints: NumericHint[]) {
+  const lockedWords = new Set<PhotoTextWord>();
+  let corrections = 0;
+  const usedHints = new Set<NumericHint>();
+
+  for (const block of blocks) {
+    for (const paragraph of block.paragraphs) {
+      for (const line of paragraph.lines) {
+        for (const word of line.words) {
+          const groups = digitGroups(word.text);
+          if (!groups.length) continue;
+          let revised = word.text;
+          let localCorrections = 0;
+          let localMatches = 0;
+          let offsetChange = 0;
+
+          for (const group of groups) {
+            const groupBbox = approximateFragmentBbox(word, group.index ?? 0, group[0].length);
+            const groupCenter = center(groupBbox);
+            const candidate = hints
+              .filter((hint) => !usedHints.has(hint) && overlapRatio(groupBbox, hint.bbox) >= 0.25)
+              .map((hint) => {
+                const hintCenter = center(hint.bbox);
+                const xDistance = Math.abs(groupCenter.x - hintCenter.x);
+                const allowableDistance = Math.max(45, (word.bbox.y1 - word.bbox.y0) * 4.5);
+                const sourceDigits = asciiDigits(group[0]);
+                const hintDigits = asciiDigits(hint.text);
+                const lengthPenalty = Math.abs(sourceDigits.length - hintDigits.length) * 14;
+                return { hint, score: hint.priority - (xDistance / allowableDistance) * 35 - lengthPenalty };
+              })
+              .filter(({ hint, score }) => score >= 45 && asciiDigits(hint.text).length > 0)
+              .sort((left, right) => right.score - left.score)[0]?.hint;
+
+            if (!candidate) continue;
+            localMatches += 1;
+            const replacement = candidate.text;
+            const start = (group.index ?? 0) + offsetChange;
+            if (asciiDigits(group[0]) !== asciiDigits(replacement)) {
+              revised = `${revised.slice(0, start)}${replacement}${revised.slice(start + group[0].length)}`;
+              offsetChange += replacement.length - group[0].length;
+              localCorrections += 1;
+            }
+            usedHints.add(candidate);
+          }
+
+          if (localMatches) lockedWords.add(word);
+          if (localCorrections) {
+            word.text = revised;
+            corrections += localCorrections;
+          }
+        }
+      }
+    }
+  }
+
+  return { corrections, lockedWords };
+}
+
+function createNumericCrop(bitmap: ImageBitmap, bbox: OcrBbox) {
+  const wordHeight = Math.max(8, bbox.y1 - bbox.y0);
+  const paddingX = wordHeight * 0.45;
+  const paddingY = wordHeight * 0.55;
+  const left = Math.max(0, Math.floor(bbox.x0 - paddingX));
+  const top = Math.max(0, Math.floor(bbox.y0 - paddingY));
+  const right = Math.min(bitmap.width, Math.ceil(bbox.x1 + paddingX));
+  const bottom = Math.min(bitmap.height, Math.ceil(bbox.y1 + paddingY));
+  const sourceWidth = Math.max(1, right - left);
+  const sourceHeight = Math.max(1, bottom - top);
+  const scale = Math.max(2, Math.min(4, 110 / wordHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(sourceWidth * scale);
+  canvas.height = Math.ceil(sourceHeight * scale);
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("अंकों की दोबारा जाँच नहीं हो सकी।");
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(bitmap, left, top, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+function replaceDigitGroups(source: string, replacements: string[]) {
+  let replacementIndex = 0;
+  return source.replace(NUMERIC_FRAGMENT, (fragment) => {
+    if (!/[0-9\u0966-\u096f]/.test(fragment)) return fragment;
+    const replacement = replacements[replacementIndex];
+    replacementIndex += 1;
+    return replacement ?? fragment;
+  });
+}
+
+async function refinePdfNumbers(
+  worker: Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>>,
+  source: Blob,
+  blocks: PhotoTextBlock[],
+  hints: NumericHint[],
+  singleWordMode: import("tesseract.js").PSM,
+  automaticMode: import("tesseract.js").PSM,
+) {
+  const embedded = applyEmbeddedNumberHints(blocks, hints);
+  const candidates = blocks.flatMap((block) => block.paragraphs.flatMap((paragraph) => (
+    paragraph.lines.flatMap((line) => line.words)
+  ))).filter((word) => {
+    const groups = digitGroups(word.text);
+    return groups.some((group) => asciiDigits(group[0]).length >= 2)
+      && (word.confidence < 92 || /[./:-]/.test(word.text));
+  }).slice(0, 24);
+
+  let corrections = embedded.corrections;
+  let uncertainNumbers = 0;
+  const bitmap = await createImageBitmap(source);
+  try {
+    await worker.setParameters({
+      classify_bln_numeric_mode: "1",
+      preserve_interword_spaces: "1",
+      tessedit_char_whitelist: "0123456789\u0966\u0967\u0968\u0969\u096a\u096b\u096c\u096d\u096e\u096f./:-",
+      tessedit_pageseg_mode: singleWordMode,
+      user_defined_dpi: "300",
+    });
+
+    for (const word of candidates) {
+      if (embedded.lockedWords.has(word)) continue;
+      const originalGroups = digitGroups(word.text);
+      const crop = createNumericCrop(bitmap, word.bbox);
+      const result = await worker.recognize(crop, {}, { text: true });
+      const refinedGroups = digitGroups(result.data.text.trim());
+      const sameGroupCount = refinedGroups.length === originalGroups.length && refinedGroups.length > 0;
+      const refinedConfidence = result.data.confidence ?? 0;
+      const shouldUseRefined = sameGroupCount && (
+        refinedConfidence >= 85 || (word.confidence < 90 && refinedConfidence >= word.confidence - 8)
+      );
+
+      if (shouldUseRefined) {
+        const replacements = refinedGroups.map((group) => group[0]);
+        const revised = replaceDigitGroups(word.text, replacements);
+        if (asciiDigits(revised) !== asciiDigits(word.text)) {
+          word.text = revised;
+          corrections += 1;
+        }
+      } else if (word.confidence < 70) {
+        uncertainNumbers += 1;
+      }
+    }
+  } finally {
+    bitmap.close();
+    await worker.setParameters({
+      classify_bln_numeric_mode: "0",
+      preserve_interword_spaces: "1",
+      tessedit_char_whitelist: "",
+      tessedit_pageseg_mode: automaticMode,
+      user_defined_dpi: "300",
+    });
+  }
+
+  return { corrections, uncertainNumbers };
+}
+
+function blockRecognitionText(blocks: PhotoTextBlock[] | null, fallback: string) {
+  if (!blocks?.length) return fallback;
+  const paragraphs = blocks.flatMap((block) => block.paragraphs.flatMap((paragraph) => {
+    const lines = paragraph.lines.map((line) => line.words.map((word) => word.text.trim()).filter(Boolean).join(" ")).filter(Boolean);
+    return lines.length ? [lines.join("\n")] : [];
+  }));
+  return paragraphs.join("\n\n").trim() || fallback;
 }
 
 function cleanPhotoRecognition(blocks: PhotoTextBlock[] | null, fallback: string) {
@@ -467,17 +759,49 @@ export function HindiKrutidevWorkspace() {
 
       const recognized: RecognizedPage[] = [];
       for (let index = 0; index < prepared.length; index += 1) {
+        const preparedPage = prepared[index];
+        if (isPdf && preparedPage.embeddedText) {
+          recognized.push({
+            height: preparedPage.height,
+            numericCorrections: 0,
+            png: preparedPage.png,
+            text: repairOrderedListNumbers(preparedPage.embeddedText),
+            uncertainNumbers: 0,
+            width: preparedPage.width,
+          });
+          setProgress(15 + Math.round(((index + 1) / prepared.length) * 80));
+          continue;
+        }
+
         setStatus(`Page ${index + 1}/${prepared.length} साफ़ करके Hindi text पढ़ा जा रहा है…`);
-        const ocrImage = await enhanceForOcr(prepared[index].blob, printedTextOnly, !isPdf);
-        const result = await worker.recognize(ocrImage, {}, { blocks: !isPdf, text: true });
+        const ocrImage = await enhanceForOcr(preparedPage.blob, printedTextOnly, true);
+        const result = await worker.recognize(ocrImage, {}, { blocks: true, text: true });
+        const blocks = result.data.blocks as PhotoTextBlock[] | null;
+        let numericCorrections = 0;
+        let uncertainNumbers = 0;
+        if (isPdf && blocks?.length) {
+          setStatus(`Page ${index + 1}/${prepared.length} की तारीख और अंक दोबारा जाँचे जा रहे हैं…`);
+          const numericResult = await refinePdfNumbers(
+            worker,
+            preparedPage.blob,
+            blocks,
+            preparedPage.numberHints,
+            PSM.SINGLE_WORD,
+            PSM.AUTO,
+          );
+          numericCorrections = numericResult.corrections;
+          uncertainNumbers = numericResult.uncertainNumbers;
+        }
         const extractedText = isPdf
-          ? result.data.text.trim()
-          : cleanPhotoRecognition(result.data.blocks, result.data.text.trim());
+          ? blockRecognitionText(blocks, result.data.text.trim())
+          : cleanPhotoRecognition(blocks, result.data.text.trim());
         recognized.push({
-          height: prepared[index].height,
-          png: prepared[index].png,
-          text: isPdf ? extractedText : repairOrderedListNumbers(extractedText),
-          width: prepared[index].width,
+          height: preparedPage.height,
+          numericCorrections,
+          png: preparedPage.png,
+          text: repairOrderedListNumbers(extractedText),
+          uncertainNumbers,
+          width: preparedPage.width,
         });
         setProgress(15 + Math.round(((index + 1) / prepared.length) * 80));
       }
@@ -621,6 +945,16 @@ export function HindiKrutidevWorkspace() {
                     <div key={index} className="rounded-2xl border border-slate-200 p-4">
                       <label htmlFor={`ocr-page-${index}`} className="font-black text-slate-900">Page {index + 1}</label>
                       <textarea id={`ocr-page-${index}`} value={page.text} onChange={(event) => updatePageText(index, event.target.value)} rows={index === 0 ? 10 : 6} className="mt-3 w-full resize-y rounded-xl border border-slate-300 bg-[#fbfcfc] p-4 font-medium leading-7 text-slate-800 outline-none focus:border-[#2f6a59] focus:ring-4 focus:ring-[#2f6a59]/10" />
+                      {page.numericCorrections > 0 && (
+                        <p className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold leading-5 text-emerald-800">
+                          {page.numericCorrections} तारीख/अंक दूसरी जाँच से सुधारे गए हैं।
+                        </p>
+                      )}
+                      {page.uncertainNumbers > 0 && (
+                        <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold leading-5 text-amber-900">
+                          {page.uncertainNumbers} अंक पूरी तरह स्पष्ट नहीं हैं—मूल PDF देखकर एक बार जाँच लें।
+                        </p>
+                      )}
                     </div>
                   ))}
                 </div>
