@@ -5,8 +5,8 @@ import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 
 export const metadata: Metadata = {
-  title: "Hindi PDF/Image से Kruti Dev Word — Office Sahayak",
-  description: "Hindi PDF, JPG या PNG से OCR करके editable Kruti Dev 010 Word और original-layout Word file बनाएँ।",
+  title: "Hindi PDF/Image से Kruti Dev और DevLys Word — Office Sahayak",
+  description: "Hindi PDF, JPG या PNG से OCR करके justified और editable Kruti Dev 010 तथा DevLys 010 Word files बनाएँ।",
 };
 
 export default function HindiKrutidevWordPage() {
@@ -20,15 +20,15 @@ export default function HindiKrutidevWordPage() {
             <nav aria-label="Breadcrumb" className="text-sm font-semibold text-slate-500">
               <Link href="/" className="hover:text-[#173f35]">होम</Link>
               <span className="mx-2" aria-hidden="true">/</span>
-              <span className="text-slate-800">Hindi से Kruti Dev Word</span>
+              <span className="text-slate-800">Hindi से Kruti Dev/DevLys Word</span>
             </nav>
             <div className="mt-8 max-w-4xl">
               <div className="inline-flex items-center gap-2 rounded-full border border-[#173f35]/15 bg-white/75 px-4 py-2 text-sm font-bold text-[#173f35] shadow-sm">
                 <span aria-hidden="true">🔤</span> Browser OCR • MeshAPI खर्च ₹0
               </div>
-              <h1 className="mt-6 text-4xl font-black tracking-[-0.04em] text-[#132b25] sm:text-6xl">Hindi PDF/Image से<br className="hidden sm:block" /> Kruti Dev Word</h1>
+              <h1 className="mt-6 text-4xl font-black tracking-[-0.04em] text-[#132b25] sm:text-6xl">Hindi PDF/Image से<br className="hidden sm:block" /> Kruti Dev और DevLys Word</h1>
               <p className="mt-5 max-w-3xl text-lg leading-8 text-slate-600">
-                Scanned Hindi PDF या फोटो से text पहचानें, गलती सुधारें और editable Kruti Dev 010 Word के साथ original-layout Word भी पाएँ।
+                Scanned Hindi PDF या फोटो से text पहचानें, गलती सुधारें और justified paragraphs के साथ editable Kruti Dev 010 तथा DevLys 010 Word पाएँ।
               </p>
             </div>
           </div>
