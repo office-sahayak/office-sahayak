@@ -1,7 +1,7 @@
 const popularTasks = [
-  { icon: "📎", label: "PDF मर्ज", tone: "bg-rose-50" },
-  { icon: "🧮", label: "EMI कैलकुलेटर", tone: "bg-amber-50" },
-  { icon: "📝", label: "शब्द गिनती", tone: "bg-sky-50" },
+  { href: "/tools/documents/hindi-krutidev-word", icon: "कृ", label: "PDF/JPG से Editable Hindi Word", tone: "bg-emerald-50" },
+  { href: "/tools/documents/pdf-merge", icon: "📎", label: "PDF मर्ज", tone: "bg-rose-50" },
+  { href: "#tools", icon: "🧮", label: "EMI कैलकुलेटर", tone: "bg-amber-50" },
 ];
 
 export function HeroSection() {
@@ -44,11 +44,11 @@ export function HeroSection() {
             </div>
             <div className="mt-6 space-y-3">
               {popularTasks.map((task, index) => (
-                <div key={task.label} className="flex items-center gap-4 rounded-2xl border border-slate-100 bg-white p-3 shadow-sm">
+                <a key={task.label} href={task.href} className="flex items-center gap-4 rounded-2xl border border-slate-100 bg-white p-3 shadow-sm transition hover:-translate-y-0.5 hover:border-[#2f6a59]/30 hover:shadow-md">
                   <span className={`grid size-12 place-items-center rounded-xl text-xl ${task.tone}`} aria-hidden="true">{task.icon}</span>
                   <span className="flex-1 font-bold text-slate-800">{task.label}</span>
                   <span className="grid size-8 place-items-center rounded-full bg-slate-50 text-sm font-bold text-slate-400" aria-hidden="true">{index + 1}</span>
-                </div>
+                </a>
               ))}
             </div>
             <div className="mt-5 rounded-2xl bg-[#173f35] px-5 py-4 text-white">
