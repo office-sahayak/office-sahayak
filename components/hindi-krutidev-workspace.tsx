@@ -84,7 +84,7 @@ async function preparePdf(file: File, onPage: (page: number, total: number) => v
     onPage(pageNumber, pdf.numPages);
     const page = await pdf.getPage(pageNumber);
     const original = page.getViewport({ scale: 1 });
-    const scale = Math.min(2.5, 2000 / original.width);
+    const scale = Math.min(3.5, 2200 / original.width);
     const viewport = page.getViewport({ scale });
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(viewport.width);
@@ -96,6 +96,68 @@ async function preparePdf(file: File, onPage: (page: number, total: number) => v
 
   await loadingTask.destroy();
   return pages;
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("OCR के लिए page साफ़ नहीं हो सका।"));
+    }, "image/png");
+  });
+}
+
+function histogramPoint(histogram: Uint32Array, target: number) {
+  let count = 0;
+  for (let value = 0; value < histogram.length; value += 1) {
+    count += histogram[value];
+    if (count >= target) return value;
+  }
+  return 255;
+}
+
+async function enhanceForOcr(source: Blob, printedTextOnly: boolean) {
+  const bitmap = await createImageBitmap(source);
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("OCR के लिए page साफ़ नहीं हो सका।");
+  context.drawImage(bitmap, 0, 0);
+  bitmap.close();
+
+  const image = context.getImageData(0, 0, canvas.width, canvas.height);
+  const pixels = image.data;
+  const grayscale = new Uint8Array(pixels.length / 4);
+  const histogram = new Uint32Array(256);
+
+  for (let offset = 0, pixel = 0; offset < pixels.length; offset += 4, pixel += 1) {
+    const red = pixels[offset];
+    const green = pixels[offset + 1];
+    const blue = pixels[offset + 2];
+    const high = Math.max(red, green, blue);
+    const low = Math.min(red, green, blue);
+    const isColoredMark = printedTextOnly && high - low > 35 && high > 70;
+    const gray = isColoredMark ? 255 : Math.round(red * 0.299 + green * 0.587 + blue * 0.114);
+    grayscale[pixel] = gray;
+    histogram[gray] += 1;
+  }
+
+  const total = grayscale.length;
+  const blackPoint = histogramPoint(histogram, total * 0.005);
+  const whitePoint = Math.max(blackPoint + 1, histogramPoint(histogram, total * 0.995));
+
+  for (let offset = 0, pixel = 0; offset < pixels.length; offset += 4, pixel += 1) {
+    const normalized = Math.min(1, Math.max(0, (grayscale[pixel] - blackPoint) / (whitePoint - blackPoint)));
+    const enhanced = Math.round(255 * Math.pow(normalized, 1.3));
+    pixels[offset] = enhanced;
+    pixels[offset + 1] = enhanced;
+    pixels[offset + 2] = enhanced;
+    pixels[offset + 3] = 255;
+  }
+
+  context.putImageData(image, 0, 0);
+  return canvasToBlob(canvas);
 }
 
 function saveBlob(blob: Blob, fileName: string) {
@@ -186,6 +248,7 @@ export function HindiKrutidevWorkspace() {
   const [pages, setPages] = useState<RecognizedPage[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
+  const [printedTextOnly, setPrintedTextOnly] = useState(true);
   const [downloadMode, setDownloadMode] = useState<"editable" | "layout" | "both" | null>(null);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("File चुनकर OCR शुरू करें।");
@@ -234,7 +297,7 @@ export function HindiKrutidevWorkspace() {
           })
         : await prepareImage(file);
 
-      const { createWorker, OEM } = await import("tesseract.js");
+      const { createWorker, OEM, PSM } = await import("tesseract.js");
       setStatus("Hindi OCR engine पहली बार load हो रहा है…");
       worker = await createWorker(["hin", "eng"], OEM.LSTM_ONLY, {
         logger: (message) => {
@@ -244,12 +307,17 @@ export function HindiKrutidevWorkspace() {
           }
         },
       });
-      await worker.setParameters({ preserve_interword_spaces: "1", user_defined_dpi: "300" });
+      await worker.setParameters({
+        preserve_interword_spaces: "1",
+        tessedit_pageseg_mode: PSM.AUTO,
+        user_defined_dpi: "300",
+      });
 
       const recognized: RecognizedPage[] = [];
       for (let index = 0; index < prepared.length; index += 1) {
-        setStatus(`Page ${index + 1}/${prepared.length} का Hindi text पढ़ा जा रहा है…`);
-        const result = await worker.recognize(prepared[index].blob);
+        setStatus(`Page ${index + 1}/${prepared.length} साफ़ करके Hindi text पढ़ा जा रहा है…`);
+        const ocrImage = await enhanceForOcr(prepared[index].blob, printedTextOnly);
+        const result = await worker.recognize(ocrImage);
         recognized.push({
           height: prepared[index].height,
           png: prepared[index].png,
@@ -356,6 +424,13 @@ export function HindiKrutidevWorkspace() {
               <div className="mt-7 rounded-3xl border border-slate-200 bg-white p-5 sm:p-6">
                 <h2 className="text-xl font-black text-slate-950">Hindi text पहचानें</h2>
                 <p className="mt-2 text-sm leading-6 text-slate-500">OCR आपके browser में चलेगा। पहली बार Hindi language data load होने में थोड़ा समय लग सकता है।</p>
+                <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                  <input type="checkbox" checked={printedTextOnly} onChange={(event) => setPrintedTextOnly(event.target.checked)} disabled={isWorking} className="mt-1 size-4 accent-[#173f35]" />
+                  <span>
+                    <strong className="block text-sm text-emerald-950">सिर्फ साफ़ printed text पढ़ें</strong>
+                    <span className="mt-1 block text-xs leading-5 text-emerald-800">Blue signatures और coloured highlight को OCR से हटाता है। Handwritten text भी चाहिए तो इसे बंद करें।</span>
+                  </span>
+                </label>
                 <button type="button" onClick={runOcr} disabled={isWorking} className="mt-5 inline-flex min-h-12 w-full items-center justify-center rounded-full bg-[#173f35] px-6 py-3 font-black text-white transition hover:bg-[#0f3028] disabled:cursor-not-allowed disabled:opacity-50">
                   {isWorking ? "Hindi OCR चल रहा है…" : "Hindi OCR शुरू करें"}
                 </button>
