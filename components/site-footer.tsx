@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 export function SiteFooter() {
   return (
     <footer id="about" className="bg-[#102b24] text-white">
@@ -15,8 +17,8 @@ export function SiteFooter() {
           <div>
             <h2 className="font-extrabold text-white">टूल्स</h2>
             <div className="mt-4 space-y-3 text-white/60">
-              <a className="block hover:text-white" href="#categories">श्रेणियाँ</a>
-              <a className="block hover:text-white" href="#tools">सभी टूल्स</a>
+              <Link className="block hover:text-white" href="/#categories">श्रेणियाँ</Link>
+              <Link className="block hover:text-white" href="/#tools">सभी टूल्स</Link>
             </div>
           </div>
           <div>

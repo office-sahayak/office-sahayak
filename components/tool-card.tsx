@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { Tool } from "@/lib/tools";
 
 interface ToolCardProps {
@@ -15,9 +16,10 @@ const categoryTone: Record<Tool["category"], string> = {
 
 export function ToolCard({ tool }: ToolCardProps) {
   const available = tool.status === "available";
+  const cardClassName = "group flex min-h-52 flex-col rounded-3xl border border-slate-200 bg-white p-5 transition hover:-translate-y-1 hover:border-slate-300 hover:shadow-xl hover:shadow-slate-200/60";
 
-  return (
-    <article className="group flex min-h-52 flex-col rounded-3xl border border-slate-200 bg-white p-5 transition hover:-translate-y-1 hover:border-slate-300 hover:shadow-xl hover:shadow-slate-200/60">
+  const cardContent = (
+    <>
       <div className="flex items-start justify-between gap-4">
         <span className={`grid size-12 place-items-center rounded-2xl text-2xl ${categoryTone[tool.category]}`} aria-hidden="true">
           {tool.icon}
@@ -34,6 +36,20 @@ export function ToolCard({ tool }: ToolCardProps) {
         </span>
         <span className={`grid size-8 place-items-center rounded-full transition ${available ? "bg-[#173f35] text-white group-hover:translate-x-0.5" : "bg-slate-100 text-slate-400"}`} aria-hidden="true">→</span>
       </div>
-    </article>
+    </>
   );
+
+  if (available) {
+    return (
+      <Link
+        href={`/tools/${tool.category}/${tool.slug}`}
+        className={cardClassName}
+        aria-label={`${tool.name} खोलें`}
+      >
+        {cardContent}
+      </Link>
+    );
+  }
+
+  return <article className={cardClassName}>{cardContent}</article>;
 }
