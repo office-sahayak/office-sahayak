@@ -34,6 +34,22 @@ function sanitizeDocumentHtml(source: string) {
 }
 
 type WordFontKind = "legacy" | "modern" | undefined;
+type WordTextAlignment = "left" | "center" | "right" | "justify";
+
+interface WordParagraphProperties {
+  afterTwips?: number;
+  alignment?: WordTextAlignment;
+  beforeTwips?: number;
+  endTwips?: number;
+  firstLineTwips?: number;
+  hangingTwips?: number;
+  lineHeight?: string;
+  startTwips?: number;
+}
+
+interface WordParagraphFormat extends WordParagraphProperties {
+  text: string;
+}
 
 const WORDPROCESSING_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
@@ -50,24 +66,94 @@ function classifyWordFonts(element: Element | undefined): WordFontKind {
   return names.some((name) => /kruti\s*dev|devlys/iu.test(name)) ? "legacy" : "modern";
 }
 
+function optionalNumber(value: string) {
+  const parsed = Number(value);
+  return value !== "" && Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function wordAlignment(value: string): WordTextAlignment | undefined {
+  if (value === "center") return "center";
+  if (value === "right" || value === "end") return "right";
+  if (value === "both" || value === "distribute" || value === "thaiDistribute") return "justify";
+  if (value === "left" || value === "start") return "left";
+  return undefined;
+}
+
+function readWordParagraphProperties(paragraphProperties: Element | undefined): WordParagraphProperties {
+  if (!paragraphProperties) return {};
+  const alignmentElement = localElements(paragraphProperties, "jc")[0];
+  const indent = localElements(paragraphProperties, "ind")[0];
+  const spacing = localElements(paragraphProperties, "spacing")[0];
+  const line = optionalNumber(wordAttribute(spacing, "line"));
+  const lineRule = wordAttribute(spacing, "lineRule");
+  return {
+    alignment: wordAlignment(wordAttribute(alignmentElement, "val")),
+    startTwips: optionalNumber(wordAttribute(indent, "start") || wordAttribute(indent, "left")),
+    endTwips: optionalNumber(wordAttribute(indent, "end") || wordAttribute(indent, "right")),
+    firstLineTwips: optionalNumber(wordAttribute(indent, "firstLine")),
+    hangingTwips: optionalNumber(wordAttribute(indent, "hanging")),
+    beforeTwips: optionalNumber(wordAttribute(spacing, "before")),
+    afterTwips: optionalNumber(wordAttribute(spacing, "after")),
+    lineHeight: line === undefined ? undefined : lineRule === "exact" || lineRule === "atLeast" ? `${line / 15}px` : String(line / 240),
+  };
+}
+
+function definedProperties(properties: WordParagraphProperties) {
+  return Object.fromEntries(Object.entries(properties).filter(([, value]) => value !== undefined)) as WordParagraphProperties;
+}
+
+function normalizedParagraphText(value: string) {
+  return value.replace(/\s+/gu, " ").trim();
+}
+
+function applyWordParagraphFormatting(source: string, formats: WordParagraphFormat[]) {
+  if (!formats.length) return source;
+  const documentNode = new DOMParser().parseFromString(source, "text/html");
+  const selector = "p, h1, h2, h3, h4, h5, h6, li";
+  const blocks = Array.from(documentNode.body.querySelectorAll<HTMLElement>(selector)).filter((block) => !Array.from(block.children).some((child) => child.matches(selector)));
+  let formatIndex = 0;
+
+  for (const block of blocks) {
+    const blockText = normalizedParagraphText(block.textContent ?? "");
+    let matchingIndex = -1;
+    for (let candidate = formatIndex; candidate < Math.min(formats.length, formatIndex + 30); candidate += 1) {
+      if (formats[candidate].text === blockText) { matchingIndex = candidate; break; }
+    }
+    if (matchingIndex < 0) continue;
+    const format = formats[matchingIndex];
+    formatIndex = matchingIndex + 1;
+    if (format.alignment) block.style.textAlign = format.alignment;
+    if (format.startTwips !== undefined) block.style.marginLeft = `${format.startTwips / 15}px`;
+    if (format.endTwips !== undefined) block.style.marginRight = `${format.endTwips / 15}px`;
+    if (format.beforeTwips !== undefined) block.style.marginTop = `${format.beforeTwips / 15}px`;
+    if (format.afterTwips !== undefined) block.style.marginBottom = `${format.afterTwips / 15}px`;
+    if (format.firstLineTwips !== undefined) block.style.textIndent = `${format.firstLineTwips / 15}px`;
+    else if (format.hangingTwips !== undefined) block.style.textIndent = `${-format.hangingTwips / 15}px`;
+    if (format.lineHeight) block.style.lineHeight = format.lineHeight;
+  }
+  return documentNode.body.innerHTML;
+}
+
 async function normalizeLegacyHindiRuns(arrayBuffer: ArrayBuffer) {
   const zip = await JSZip.loadAsync(arrayBuffer);
   const documentFile = zip.file("word/document.xml");
-  if (!documentFile) return { arrayBuffer, convertedRuns: 0 };
+  if (!documentFile) return { arrayBuffer, convertedRuns: 0, paragraphFormats: [] as WordParagraphFormat[] };
 
   const documentXml = parseXml(await documentFile.async("string"));
   const stylesFile = zip.file("word/styles.xml");
   const stylesXml = stylesFile ? parseXml(await stylesFile.async("string")) : null;
-  const styles = new Map<string, { basedOn: string; fontKind: WordFontKind }>();
+  const styles = new Map<string, { basedOn: string; fontKind: WordFontKind; paragraph: WordParagraphProperties }>();
 
   if (stylesXml) {
     for (const style of localElements(stylesXml, "style")) {
       const styleId = wordAttribute(style, "styleId");
       if (!styleId) continue;
       const runProperties = localElements(style, "rPr")[0];
+      const paragraphProperties = localElements(style, "pPr")[0];
       styles.set(styleId, {
         basedOn: wordAttribute(localElements(style, "basedOn")[0], "val"),
         fontKind: classifyWordFonts(runProperties ? localElements(runProperties, "rFonts")[0] : undefined),
+        paragraph: definedProperties(readWordParagraphProperties(paragraphProperties)),
       });
     }
   }
@@ -80,8 +166,18 @@ async function normalizeLegacyHindiRuns(arrayBuffer: ArrayBuffer) {
     return style.fontKind ?? styleFontKind(style.basedOn, visited);
   }
 
+  function styleParagraphProperties(styleId: string, visited = new Set<string>()): WordParagraphProperties {
+    if (!styleId || visited.has(styleId)) return {};
+    visited.add(styleId);
+    const style = styles.get(styleId);
+    if (!style) return {};
+    return { ...styleParagraphProperties(style.basedOn, visited), ...style.paragraph };
+  }
+
   const defaultRunProperties = stylesXml ? localElements(stylesXml, "rPrDefault")[0] : undefined;
   const defaultFontKind = classifyWordFonts(defaultRunProperties ? localElements(defaultRunProperties, "rFonts")[0] : undefined);
+  const defaultParagraphProperties = stylesXml ? localElements(stylesXml, "pPrDefault")[0] : undefined;
+  const defaultParagraphFormat = definedProperties(readWordParagraphProperties(defaultParagraphProperties ? localElements(defaultParagraphProperties, "pPr")[0] : undefined));
   let convertedRuns = 0;
 
   for (const run of localElements(documentXml, "r")) {
@@ -107,11 +203,20 @@ async function normalizeLegacyHindiRuns(arrayBuffer: ArrayBuffer) {
     if (runChanged) convertedRuns += 1;
   }
 
-  if (!convertedRuns) return { arrayBuffer, convertedRuns };
+  const paragraphFormats = localElements(documentXml, "p").map((paragraph) => {
+    const paragraphProperties = localElements(paragraph, "pPr")[0];
+    const styleId = wordAttribute(paragraphProperties ? localElements(paragraphProperties, "pStyle")[0] : undefined, "val");
+    const directProperties = definedProperties(readWordParagraphProperties(paragraphProperties));
+    const text = normalizedParagraphText(localElements(paragraph, "t").map((element) => element.textContent ?? "").join(""));
+    return { text, ...defaultParagraphFormat, ...styleParagraphProperties(styleId), ...directProperties };
+  });
+
+  if (!convertedRuns) return { arrayBuffer, convertedRuns, paragraphFormats };
   zip.file("word/document.xml", new XMLSerializer().serializeToString(documentXml));
   return {
     arrayBuffer: await zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" }),
     convertedRuns,
+    paragraphFormats,
   };
 }
 
@@ -257,7 +362,7 @@ export function WordToPdfWorkspace() {
         { arrayBuffer: normalizedDocument.arrayBuffer },
         { convertImage: mammoth.images.dataUri, ignoreEmptyParagraphs: false },
       );
-      const safeHtml = sanitizeDocumentHtml(result.value);
+      const safeHtml = applyWordParagraphFormatting(sanitizeDocumentHtml(result.value), normalizedDocument.paragraphFormats);
       if (!safeHtml.trim()) throw new Error("इस Word file में पढ़ने योग्य content नहीं मिला।");
       setFile(selected);
       setHtml(safeHtml);
