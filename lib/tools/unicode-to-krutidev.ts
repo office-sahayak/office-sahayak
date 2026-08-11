@@ -49,6 +49,29 @@ const krutiGlyphs = [
 
 const devanagariMark = /[\u0900-\u097f]/u;
 const matras = new Set(["ा", "ि", "ी", "ु", "ू", "ृ", "े", "ै", "ो", "ौ", "ं", "ः", "ँ", "ॅ", "़"]);
+const legacyToUnicode = new Map<string, string>();
+
+for (let index = 0; index < krutiGlyphs.length; index += 1) {
+  const legacy = krutiGlyphs[index];
+  const unicode = unicodeGlyphs[index];
+  if (legacy !== unicode) legacyToUnicode.set(legacy, unicode);
+}
+
+// Kruti Dev uses the same glyph for a rare micro sign and a normal hyphen.
+// Office documents overwhelmingly intend a hyphen (for example, 2025-26).
+legacyToUnicode.set("&", "-");
+
+const legacyPattern = new RegExp(
+  Array.from(legacyToUnicode.keys())
+    .sort((left, right) => right.length - left.length)
+    .map((value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"))
+    .join("|"),
+  "gu",
+);
+const devanagariConsonant = "[\\u0915-\\u0939\\u0958-\\u095f]";
+const consonantCluster = `(?:${devanagariConsonant}\\u093c?\\u094d)*${devanagariConsonant}\\u093c?`;
+const shortIMarkerPattern = new RegExp(`f(${consonantCluster})`, "gu");
+const rephMarkerPattern = new RegExp(`(${consonantCluster}[\\u0901-\\u0903\\u093a\\u093b\\u093e-\\u094c\\u094e\\u094f]*)Z`, "gu");
 
 function moveShortI(text: string) {
   let value = text;
@@ -107,6 +130,15 @@ export function unicodeToKrutiDev(text: string) {
   }
 
   return converted;
+}
+
+export function krutiDevToUnicode(text: string) {
+  if (!text) return "";
+
+  let converted = text.replace(legacyPattern, (legacy) => legacyToUnicode.get(legacy) ?? legacy);
+  converted = converted.replace(shortIMarkerPattern, "$1ि");
+  converted = converted.replace(rephMarkerPattern, "र्$1");
+  return converted.normalize("NFC");
 }
 
 export function containsDevanagari(text: string) {

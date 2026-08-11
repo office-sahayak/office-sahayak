@@ -56,3 +56,8 @@ input:focus-visible {
   background: #cde1d8;
   color: #102b24;
 }
+
+.word-pdf-preview,
+.word-pdf-preview * {
+  font-family: "Noto Sans Devanagari", "Nirmala UI", Mangal, sans-serif !important;
+}

@@ -5,8 +5,13 @@ import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
 import JSZip from "jszip";
 import mammoth from "mammoth";
+import { krutiDevToUnicode } from "@/lib/tools/unicode-to-krutidev";
 
 type PdfOrientation = "portrait" | "landscape";
+
+const PDF_RENDER_SCALE = 1.35;
+const PAGES_PER_RENDER = 3;
+const HINDI_FONT_STACK = '"Noto Sans Devanagari", "Nirmala UI", Mangal, sans-serif';
 
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -28,54 +33,170 @@ function sanitizeDocumentHtml(source: string) {
   return documentNode.body.innerHTML;
 }
 
-async function exportElementToPdf(element: HTMLElement, fileName: string, orientation: PdfOrientation) {
-  await document.fonts.ready;
-  const width = Math.max(element.scrollWidth, element.clientWidth);
-  const height = Math.max(element.scrollHeight, element.clientHeight);
-  if (width > 6000 || height > 20000 || width * height > 50_000_000) {
-    throw new Error("यह document browser में PDF बनाने के लिए बहुत बड़ा है। इसे छोटे भागों में बाँटकर प्रयास करें।");
+type WordFontKind = "legacy" | "modern" | undefined;
+
+const WORDPROCESSING_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+function wordAttribute(element: Element | undefined, name: string) {
+  return element?.getAttributeNS(WORDPROCESSING_NAMESPACE, name) ?? element?.getAttribute(`w:${name}`) ?? "";
+}
+
+function classifyWordFonts(element: Element | undefined): WordFontKind {
+  if (!element) return undefined;
+  const names = ["ascii", "hAnsi", "eastAsia", "cs"]
+    .map((attribute) => wordAttribute(element, attribute))
+    .filter(Boolean);
+  if (!names.length) return undefined;
+  return names.some((name) => /kruti\s*dev|devlys/iu.test(name)) ? "legacy" : "modern";
+}
+
+async function normalizeLegacyHindiRuns(arrayBuffer: ArrayBuffer) {
+  const zip = await JSZip.loadAsync(arrayBuffer);
+  const documentFile = zip.file("word/document.xml");
+  if (!documentFile) return { arrayBuffer, convertedRuns: 0 };
+
+  const documentXml = parseXml(await documentFile.async("string"));
+  const stylesFile = zip.file("word/styles.xml");
+  const stylesXml = stylesFile ? parseXml(await stylesFile.async("string")) : null;
+  const styles = new Map<string, { basedOn: string; fontKind: WordFontKind }>();
+
+  if (stylesXml) {
+    for (const style of localElements(stylesXml, "style")) {
+      const styleId = wordAttribute(style, "styleId");
+      if (!styleId) continue;
+      const runProperties = localElements(style, "rPr")[0];
+      styles.set(styleId, {
+        basedOn: wordAttribute(localElements(style, "basedOn")[0], "val"),
+        fontKind: classifyWordFonts(runProperties ? localElements(runProperties, "rFonts")[0] : undefined),
+      });
+    }
   }
 
-  const canvas = await html2canvas(element, {
-    backgroundColor: "#ffffff",
-    logging: false,
-    scale: 1.5,
-    useCORS: false,
-    width,
-    height,
-    windowWidth: width,
-    windowHeight: height,
-  });
+  function styleFontKind(styleId: string, visited = new Set<string>()): WordFontKind {
+    if (!styleId || visited.has(styleId)) return undefined;
+    visited.add(styleId);
+    const style = styles.get(styleId);
+    if (!style) return undefined;
+    return style.fontKind ?? styleFontKind(style.basedOn, visited);
+  }
+
+  const defaultRunProperties = stylesXml ? localElements(stylesXml, "rPrDefault")[0] : undefined;
+  const defaultFontKind = classifyWordFonts(defaultRunProperties ? localElements(defaultRunProperties, "rFonts")[0] : undefined);
+  let convertedRuns = 0;
+
+  for (const run of localElements(documentXml, "r")) {
+    const runProperties = localElements(run, "rPr")[0];
+    const directFontKind = classifyWordFonts(runProperties ? localElements(runProperties, "rFonts")[0] : undefined);
+    const runStyleId = wordAttribute(runProperties ? localElements(runProperties, "rStyle")[0] : undefined, "val");
+    let paragraph: Element | null = run.parentElement;
+    while (paragraph && paragraph.localName !== "p") paragraph = paragraph.parentElement;
+    const paragraphProperties = paragraph ? localElements(paragraph, "pPr")[0] : undefined;
+    const paragraphStyleId = wordAttribute(paragraphProperties ? localElements(paragraphProperties, "pStyle")[0] : undefined, "val");
+    const fontKind = directFontKind ?? styleFontKind(runStyleId) ?? styleFontKind(paragraphStyleId) ?? defaultFontKind;
+    if (fontKind !== "legacy") continue;
+
+    let runChanged = false;
+    for (const textNode of localElements(run, "t")) {
+      const original = textNode.textContent ?? "";
+      const converted = krutiDevToUnicode(original);
+      if (converted !== original) {
+        textNode.textContent = converted;
+        runChanged = true;
+      }
+    }
+    if (runChanged) convertedRuns += 1;
+  }
+
+  if (!convertedRuns) return { arrayBuffer, convertedRuns };
+  zip.file("word/document.xml", new XMLSerializer().serializeToString(documentXml));
+  return {
+    arrayBuffer: await zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" }),
+    convertedRuns,
+  };
+}
+
+async function waitForImages(element: HTMLElement) {
+  await Promise.all(Array.from(element.querySelectorAll("img")).map((image) => {
+    if (image.complete) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      image.addEventListener("load", () => resolve(), { once: true });
+      image.addEventListener("error", () => resolve(), { once: true });
+    });
+  }));
+}
+
+async function exportElementToPdf(
+  element: HTMLElement,
+  fileName: string,
+  orientation: PdfOrientation,
+  onProgress?: (completedPages: number, totalPages: number) => void,
+) {
+  await document.fonts.load(`400 16px ${HINDI_FONT_STACK}`, "हिन्दी कार्यालय सहायक");
+  await document.fonts.ready;
+  await waitForImages(element);
+
+  const width = Math.ceil(Math.max(element.scrollWidth, element.clientWidth));
+  const height = Math.ceil(Math.max(element.scrollHeight, element.clientHeight));
+  if (!width || !height || width > 6000) throw new Error("Document की चौड़ाई PDF बनाने के लिए बहुत अधिक है।");
+
   const pdf = new jsPDF({ orientation, unit: "pt", format: "a4", compress: true });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
   const margin = 24;
   const printableWidth = pageWidth - margin * 2;
   const printableHeight = pageHeight - margin * 2;
-  const sourcePageHeight = Math.max(1, Math.floor(canvas.width * printableHeight / printableWidth));
+  const sourcePageHeight = Math.max(1, Math.floor(width * printableHeight / printableWidth));
+  const totalPages = Math.ceil(height / sourcePageHeight);
+  if (totalPages > 300) throw new Error("इस document में 300 से अधिक PDF pages बन रहे हैं। कृपया इसे दो files में बाँटें।");
 
-  let sourceY = 0;
-  let pageIndex = 0;
-  while (sourceY < canvas.height) {
-    const sliceHeight = Math.min(sourcePageHeight, canvas.height - sourceY);
-    const pageCanvas = document.createElement("canvas");
-    pageCanvas.width = canvas.width;
-    pageCanvas.height = sliceHeight;
-    const context = pageCanvas.getContext("2d");
-    if (!context) throw new Error("PDF page तैयार नहीं हो सका।");
-    context.fillStyle = "#ffffff";
-    context.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
-    context.drawImage(canvas, 0, sourceY, canvas.width, sliceHeight, 0, 0, canvas.width, sliceHeight);
-    const renderedHeight = sliceHeight * printableWidth / canvas.width;
-    if (pageIndex > 0) pdf.addPage();
-    pdf.addImage(pageCanvas.toDataURL("image/jpeg", 0.9), "JPEG", margin, margin, printableWidth, renderedHeight, undefined, "FAST");
-    pageCanvas.width = 1;
-    pageCanvas.height = 1;
-    sourceY += sliceHeight;
-    pageIndex += 1;
+  for (let firstPage = 0; firstPage < totalPages; firstPage += PAGES_PER_RENDER) {
+    const sourceY = firstPage * sourcePageHeight;
+    const chunkHeight = Math.min(sourcePageHeight * PAGES_PER_RENDER, height - sourceY);
+    const chunkCanvas = await html2canvas(element, {
+      backgroundColor: "#ffffff",
+      height: chunkHeight,
+      logging: false,
+      onclone: (_clonedDocument, clonedElement) => {
+        clonedElement.style.setProperty("font-family", HINDI_FONT_STACK, "important");
+        clonedElement.querySelectorAll<HTMLElement>("*").forEach((child) => {
+          child.style.setProperty("font-family", HINDI_FONT_STACK, "important");
+        });
+      },
+      scale: PDF_RENDER_SCALE,
+      useCORS: false,
+      width,
+      windowHeight: chunkHeight,
+      windowWidth: width,
+      y: sourceY,
+    });
+    const renderedScale = chunkCanvas.width / width;
+    const pagesInChunk = Math.min(PAGES_PER_RENDER, totalPages - firstPage);
+
+    for (let offset = 0; offset < pagesInChunk; offset += 1) {
+      const pageNumber = firstPage + offset;
+      const pageSourceY = offset * sourcePageHeight;
+      const remainingHeight = height - pageNumber * sourcePageHeight;
+      const pageSourceHeight = Math.min(sourcePageHeight, remainingHeight);
+      const pixelY = Math.round(pageSourceY * renderedScale);
+      const pixelHeight = Math.max(1, Math.min(chunkCanvas.height - pixelY, Math.ceil(pageSourceHeight * renderedScale)));
+      const pageCanvas = document.createElement("canvas");
+      pageCanvas.width = chunkCanvas.width;
+      pageCanvas.height = Math.max(1, pixelHeight);
+      const context = pageCanvas.getContext("2d");
+      if (!context) throw new Error("PDF page तैयार नहीं हो सका।");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
+      context.drawImage(chunkCanvas, 0, pixelY, chunkCanvas.width, pixelHeight, 0, 0, pageCanvas.width, pixelHeight);
+      const renderedHeight = pageSourceHeight * printableWidth / width;
+      if (pageNumber > 0) pdf.addPage();
+      pdf.addImage(pageCanvas.toDataURL("image/jpeg", 0.92), "JPEG", margin, margin, printableWidth, renderedHeight, undefined, "FAST");
+      pageCanvas.width = 1;
+      pageCanvas.height = 1;
+      onProgress?.(pageNumber + 1, totalPages);
+    }
+    chunkCanvas.width = 1;
+    chunkCanvas.height = 1;
   }
-  canvas.width = 1;
-  canvas.height = 1;
   pdf.save(fileName);
 }
 
@@ -103,15 +224,17 @@ export function WordToPdfWorkspace() {
     if (selected.size > 15 * 1024 * 1024) { setError("Word file का आकार 15 MB से कम रखें।"); return; }
     setIsWorking(true);
     try {
+      const normalizedDocument = await normalizeLegacyHindiRuns(await selected.arrayBuffer());
       const result = await mammoth.convertToHtml(
-        { arrayBuffer: await selected.arrayBuffer() },
+        { arrayBuffer: normalizedDocument.arrayBuffer },
         { convertImage: mammoth.images.dataUri, ignoreEmptyParagraphs: false },
       );
       const safeHtml = sanitizeDocumentHtml(result.value);
       if (!safeHtml.trim()) throw new Error("इस Word file में पढ़ने योग्य content नहीं मिला।");
       setFile(selected);
       setHtml(safeHtml);
-      setMessage(result.messages.length ? `Preview तैयार है। ${result.messages.length} formatting warning मिली—PDF से पहले preview जाँच लें।` : "Preview तैयार है। अब PDF download कर सकते हैं।");
+      const legacyNote = normalizedDocument.convertedRuns ? `${normalizedDocument.convertedRuns} Kruti Dev/DevLys text runs Unicode Hindi में बदले गए। ` : "";
+      setMessage(result.messages.length ? `${legacyNote}Preview तैयार है। ${result.messages.length} formatting warning मिली—PDF से पहले preview जाँच लें।` : `${legacyNote}Preview तैयार है। अब PDF download कर सकते हैं।`);
     } catch (caughtError) {
       setFile(null); setHtml(""); setError(caughtError instanceof Error ? caughtError.message : "Word file नहीं खुल सकी।");
     } finally { setIsWorking(false); }
@@ -121,7 +244,12 @@ export function WordToPdfWorkspace() {
     if (!file || !previewRef.current) return;
     setIsWorking(true); setError(""); setMessage("PDF तैयार हो रही है…");
     try {
-      await exportElementToPdf(previewRef.current, `${file.name.replace(/\.docx$/iu, "")}.pdf`, orientation);
+      await exportElementToPdf(
+        previewRef.current,
+        `${file.name.replace(/\.docx$/iu, "")}.pdf`,
+        orientation,
+        (completed, total) => setMessage(`PDF page ${completed}/${total} तैयार हो गया…`),
+      );
       setMessage("PDF download हो गई।");
     } catch (caughtError) { setError(caughtError instanceof Error ? caughtError.message : "PDF नहीं बन सकी।"); setMessage(""); }
     finally { setIsWorking(false); }
@@ -132,7 +260,7 @@ export function WordToPdfWorkspace() {
       <section className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-xl shadow-slate-200/50 sm:p-8">
         <label className="block cursor-pointer rounded-3xl border-2 border-dashed border-slate-300 bg-[#f8faf9] px-6 py-10 text-center hover:border-[#7aa596]"><span className="text-4xl" aria-hidden="true">📄</span><strong className="mt-3 block text-xl">Word file चुनें</strong><span className="mt-2 block text-sm text-slate-500">.docx • अधिकतम 15 MB</span><input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="sr-only" disabled={isWorking} onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void selectFile(selected); event.target.value = ""; }} /></label>
         {file && <div className="mt-6 flex flex-wrap items-end justify-between gap-4 rounded-2xl border border-slate-200 p-4"><div className="min-w-0"><strong className="block truncate text-slate-900">{file.name}</strong><span className="text-xs font-semibold text-slate-500">{formatBytes(file.size)}</span></div><label className="text-sm font-extrabold text-slate-700">Page <select value={orientation} onChange={(event) => setOrientation(event.target.value as PdfOrientation)} className="ml-2 rounded-xl border border-slate-300 bg-white px-3 py-2"><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select></label></div>}
-        {html && <div className="mt-7"><div className="mb-3 flex items-center justify-between"><h2 className="text-lg font-black text-slate-950">PDF Preview</h2><button type="button" onClick={() => void makePdf()} disabled={isWorking} className="rounded-full bg-[#173f35] px-6 py-3 font-black text-white disabled:opacity-50">{isWorking ? "तैयार हो रही है…" : "PDF Download करें"}</button></div><div className="max-h-[42rem] overflow-auto rounded-2xl border border-slate-300 bg-slate-100 p-3"><div ref={previewRef} className="mx-auto min-h-[900px] w-[794px] max-w-none bg-white px-14 py-12 text-[15px] leading-7 text-slate-950 shadow-sm [&_h1]:mb-5 [&_h1]:text-3xl [&_h1]:font-black [&_h2]:mb-4 [&_h2]:mt-6 [&_h2]:text-2xl [&_h2]:font-black [&_img]:mx-auto [&_img]:max-w-full [&_li]:ml-6 [&_ol]:my-4 [&_p]:my-3 [&_table]:my-5 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-slate-400 [&_td]:p-2 [&_th]:border [&_th]:border-slate-400 [&_th]:bg-slate-100 [&_th]:p-2 [&_ul]:my-4" dangerouslySetInnerHTML={{ __html: html }} /></div></div>}
+        {html && <div className="mt-7"><div className="mb-3 flex items-center justify-between"><h2 className="text-lg font-black text-slate-950">PDF Preview</h2><button type="button" onClick={() => void makePdf()} disabled={isWorking} className="rounded-full bg-[#173f35] px-6 py-3 font-black text-white disabled:opacity-50">{isWorking ? "तैयार हो रही है…" : "PDF Download करें"}</button></div><div className="max-h-[42rem] overflow-auto rounded-2xl border border-slate-300 bg-slate-100 p-3"><div ref={previewRef} className="word-pdf-preview mx-auto min-h-[900px] w-[794px] max-w-none bg-white px-14 py-12 text-[15px] leading-7 text-slate-950 shadow-sm [&_h1]:mb-5 [&_h1]:text-3xl [&_h1]:font-black [&_h2]:mb-4 [&_h2]:mt-6 [&_h2]:text-2xl [&_h2]:font-black [&_img]:mx-auto [&_img]:max-w-full [&_li]:ml-6 [&_ol]:my-4 [&_p]:my-3 [&_table]:my-5 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-slate-400 [&_td]:p-2 [&_th]:border [&_th]:border-slate-400 [&_th]:bg-slate-100 [&_th]:p-2 [&_ul]:my-4" dangerouslySetInnerHTML={{ __html: html }} /></div></div>}
         {error && <p className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{error}</p>}
         {message && <p className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold leading-6 text-emerald-800">{message}</p>}
       </section>
