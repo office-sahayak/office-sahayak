@@ -66,7 +66,7 @@ export const tools: Tool[] = [
     description: "Word \u0921\u0949\u0915\u094d\u092f\u0942\u092e\u0947\u0902\u091f \u0915\u094b PDF \u092e\u0947\u0902 \u092c\u0926\u0932\u0947\u0902",
     category: "documents",
     icon: "\u{1F4C4}",
-    status: "coming-soon",
+    status: "available",
     // \u0915\u0928\u094d\u0935\u0930\u094d\u091f, \u092c\u0926\u0932\u0947\u0902, docx = convert, badlen, docx
     keywords: ["\u0915\u0928\u094d\u0935\u0930\u094d\u091f", "\u092c\u0926\u0932\u0947\u0902", "docx"],
   },
@@ -78,7 +78,7 @@ export const tools: Tool[] = [
     description: "Excel \u0936\u0940\u091f \u0915\u094b PDF \u092e\u0947\u0902 \u092c\u0926\u0932\u0947\u0902",
     category: "documents",
     icon: "\u{1F4CA}",
-    status: "coming-soon",
+    status: "available",
     // \u0915\u0928\u094d\u0935\u0930\u094d\u091f, \u092c\u0926\u0932\u0947\u0902, xlsx = convert, badlen, xlsx
     keywords: ["\u0915\u0928\u094d\u0935\u0930\u094d\u091f", "\u092c\u0926\u0932\u0947\u0902", "xlsx"],
   },
@@ -222,30 +222,6 @@ export const tools: Tool[] = [
 
   // GOVERNMENT
   {
-    slug: "pan-card-validator",
-    // PAN \u092b\u0949\u0930\u094d\u092e\u0947\u091f \u091a\u0947\u0915\u0930 = PAN Format Checker
-    name: "PAN \u092b\u0949\u0930\u094d\u092e\u0947\u091f \u091a\u0947\u0915\u0930",
-    // PAN \u0928\u0902\u092c\u0930 \u0915\u093e \u0932\u093f\u0916\u0928\u0947 \u0915\u093e \u092b\u0949\u0930\u094d\u092e\u0947\u091f \u091c\u093e\u0901\u091a\u0947\u0902 = PAN number ka likhne ka format jaanchen
-    description: "PAN \u0928\u0902\u092c\u0930 \u0915\u093e \u0932\u093f\u0916\u0928\u0947 \u0915\u093e \u092b\u0949\u0930\u094d\u092e\u0947\u091f \u091c\u093e\u0901\u091a\u0947\u0902",
-    category: "government",
-    icon: "\u{1F4B3}",
-    status: "available",
-    // PAN, \u0935\u0948\u0932\u093f\u0921\u0947\u091f, \u091a\u0947\u0915 = PAN, validate, check
-    keywords: ["PAN", "\u0935\u0948\u0932\u093f\u0921\u0947\u091f", "\u091a\u0947\u0915"],
-  },
-  {
-    slug: "aadhaar-validator",
-    // \u0906\u0927\u093e\u0930 \u091a\u0947\u0915\u0938\u092e \u091a\u0947\u0915\u0930 = Aadhaar Checksum Checker
-    name: "\u0906\u0927\u093e\u0930 \u091a\u0947\u0915\u0938\u092e \u091a\u0947\u0915\u0930",
-    // 12-digit \u0938\u0902\u0930\u091a\u0928\u093e \u0914\u0930 \u091a\u0947\u0915\u0938\u092e \u091c\u093e\u0901\u091a\u0947\u0902 = 12-digit sanrachna aur checksum jaanchen
-    description: "12-digit \u0938\u0902\u0930\u091a\u0928\u093e \u0914\u0930 \u091a\u0947\u0915\u0938\u092e \u091c\u093e\u0901\u091a\u0947\u0902",
-    category: "government",
-    icon: "\u{1F4C7}",
-    status: "available",
-    // \u0906\u0927\u093e\u0930, \u0935\u0948\u0932\u093f\u0921\u0947\u091f, \u091a\u0947\u0915 = Aadhaar, validate, check
-    keywords: ["\u0906\u0927\u093e\u0930", "\u0935\u0948\u0932\u093f\u0921\u0947\u091f", "\u091a\u0947\u0915"],
-  },
-  {
     slug: "ifsc-code-finder",
     // IFSC \u0915\u094b\u0921 \u092b\u093e\u0907\u0902\u0921\u0930 = IFSC Code Finder
     name: "IFSC \u0915\u094b\u0921 \u092b\u093e\u0907\u0902\u0921\u0930",
@@ -253,7 +229,7 @@ export const tools: Tool[] = [
     description: "\u092c\u0948\u0902\u0915 \u0915\u093e IFSC \u0915\u094b\u0921 \u0916\u094b\u091c\u0947\u0902",
     category: "government",
     icon: "\u{1F3E6}",
-    status: "coming-soon",
+    status: "available",
     // IFSC, \u092c\u0948\u0902\u0915, \u0915\u094b\u0921 = IFSC, bank, code
     keywords: ["IFSC", "\u092c\u0948\u0902\u0915", "\u0915\u094b\u0921"],
   },
@@ -291,7 +267,7 @@ export const tools: Tool[] = [
     description: "\u0932\u0902\u092c\u0947 URL \u0915\u094b \u091b\u094b\u091f\u093e \u092c\u0928\u093e\u090f\u0902",
     category: "utilities",
     icon: "\u{1F517}",
-    status: "coming-soon",
+    status: "available",
     // URL, \u0936\u0949\u0930\u094d\u091f, \u0932\u093f\u0902\u0915 = URL, short, link
     keywords: ["URL", "\u0936\u0949\u0930\u094d\u091f", "\u0932\u093f\u0902\u0915"],
   },
