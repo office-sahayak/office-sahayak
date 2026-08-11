@@ -54,7 +54,7 @@ export const tools: Tool[] = [
     description: "PDF \u0915\u093e \u0938\u093e\u0907\u091c \u091b\u094b\u091f\u093e \u0915\u0930\u0947\u0902",
     category: "documents",
     icon: "\u{1F5DC}",
-    status: "coming-soon",
+    status: "available",
     // \u0915\u0902\u092a\u094d\u0930\u0947\u0938, \u091b\u094b\u091f\u093e, \u0938\u093e\u0907\u091c = compress, chhota, size
     keywords: ["\u0915\u0902\u092a\u094d\u0930\u0947\u0938", "\u091b\u094b\u091f\u093e", "\u0938\u093e\u0907\u091c"],
   },
@@ -91,7 +91,7 @@ export const tools: Tool[] = [
     description: "\u091f\u0947\u0915\u094d\u0938\u094d\u091f \u0915\u094b uppercase, lowercase \u092e\u0947\u0902 \u092c\u0926\u0932\u0947\u0902",
     category: "text",
     icon: "\u{1F520}",
-    status: "coming-soon",
+    status: "available",
     // uppercase, lowercase, \u0915\u0948\u092a\u093f\u091f\u0932 = uppercase, lowercase, capital
     keywords: ["uppercase", "lowercase", "\u0915\u0948\u092a\u093f\u091f\u0932"],
   },
@@ -103,7 +103,7 @@ export const tools: Tool[] = [
     description: "\u091f\u0947\u0915\u094d\u0938\u094d\u091f \u092e\u0947\u0902 \u0936\u092c\u094d\u0926 \u0914\u0930 \u0905\u0915\u094d\u0937\u0930 \u0917\u093f\u0928\u0947\u0902",
     category: "text",
     icon: "\u{1F522}",
-    status: "coming-soon",
+    status: "available",
     // \u0917\u093f\u0928\u0924\u0940, \u0915\u093e\u0909\u0902\u091f, \u0936\u092c\u094d\u0926 = ginti, count, shabd
     keywords: ["\u0917\u093f\u0928\u0924\u0940", "\u0915\u093e\u0909\u0902\u091f", "\u0936\u092c\u094d\u0926"],
   },
@@ -115,7 +115,7 @@ export const tools: Tool[] = [
     description: "\u0926\u094b \u091f\u0947\u0915\u094d\u0938\u094d\u091f \u092e\u0947\u0902 \u0905\u0902\u0924\u0930 \u0926\u0947\u0916\u0947\u0902",
     category: "text",
     icon: "\u{1F50D}",
-    status: "coming-soon",
+    status: "available",
     // \u0924\u0941\u0932\u0928\u093e, \u0905\u0902\u0924\u0930, \u0921\u093f\u092b = tulna, antar, diff
     keywords: ["\u0924\u0941\u0932\u0928\u093e", "\u0905\u0902\u0924\u0930", "\u0921\u093f\u092b"],
   },
@@ -129,7 +129,7 @@ export const tools: Tool[] = [
     description: "\u092b\u094b\u091f\u094b \u0915\u093e \u0938\u093e\u0907\u091c \u091b\u094b\u091f\u093e \u0915\u0930\u0947\u0902",
     category: "image",
     icon: "\u{1F5DC}",
-    status: "coming-soon",
+    status: "available",
     // \u0915\u0902\u092a\u094d\u0930\u0947\u0938, \u091b\u094b\u091f\u093e, \u092b\u094b\u091f\u094b = compress, chhota, photo
     keywords: ["\u0915\u0902\u092a\u094d\u0930\u0947\u0938", "\u091b\u094b\u091f\u093e", "\u092b\u094b\u091f\u094b"],
   },
@@ -141,7 +141,7 @@ export const tools: Tool[] = [
     description: "\u092b\u094b\u091f\u094b \u0915\u0940 \u0906\u0915\u093e\u0930 \u092c\u0926\u0932\u0947\u0902",
     category: "image",
     icon: "\u{1F4CF}",
-    status: "coming-soon",
+    status: "available",
     // \u0930\u093f\u0938\u093e\u0907\u091c, \u0906\u0915\u093e\u0930, \u092c\u0926\u0932\u0947\u0902 = resize, aakar, badlen
     keywords: ["\u0930\u093f\u0938\u093e\u0907\u091c", "\u0906\u0915\u093e\u0930", "\u092c\u0926\u0932\u0947\u0902"],
   },
@@ -153,7 +153,7 @@ export const tools: Tool[] = [
     description: "\u092b\u094b\u091f\u094b \u0915\u094b \u0915\u093e\u091f\u0947\u0902",
     category: "image",
     icon: "\u2702\uFE0F",
-    status: "coming-soon",
+    status: "available",
     // \u0915\u094d\u0930\u0949\u092a, \u0915\u093e\u091f\u0947\u0902, \u091f\u094d\u0930\u093f\u092e = crop, katen, trim
     keywords: ["\u0915\u094d\u0930\u0949\u092a", "\u0915\u093e\u091f\u0947\u0902", "\u091f\u094d\u0930\u093f\u092e"],
   },
@@ -165,7 +165,7 @@ export const tools: Tool[] = [
     description: "JPG, PNG, WebP \u092e\u0947\u0902 \u092c\u0926\u0932\u0947\u0902",
     category: "image",
     icon: "\u{1F5BC}",
-    status: "coming-soon",
+    status: "available",
     // \u0915\u0928\u094d\u0935\u0930\u094d\u091f, \u092b\u0949\u0930\u094d\u092e\u0947\u091f, \u092c\u0926\u0932\u0947\u0902 = convert, format, badlen
     keywords: ["\u0915\u0928\u094d\u0935\u0930\u094d\u091f", "\u092b\u0949\u0930\u094d\u092e\u0947\u091f", "\u092c\u0926\u0932\u0947\u0902"],
   },
@@ -179,7 +179,7 @@ export const tools: Tool[] = [
     description: "\u0932\u094b\u0928 \u0915\u0940 EMI \u0915\u0948\u0932\u094d\u0915\u0941\u0932\u0947\u091f \u0915\u0930\u0947\u0902",
     category: "calculators",
     icon: "\u{1F4B0}",
-    status: "coming-soon",
+    status: "available",
     // EMI, \u0932\u094b\u0928, \u0915\u093f\u0938\u094d\u0924 = EMI, loan, kist
     keywords: ["EMI", "\u0932\u094b\u0928", "\u0915\u093f\u0938\u094d\u0924"],
   },
@@ -191,7 +191,7 @@ export const tools: Tool[] = [
     description: "GST \u0915\u0948\u0932\u094d\u0915\u0941\u0932\u0947\u091f \u0915\u0930\u0947\u0902",
     category: "calculators",
     icon: "\u{1F9FE}",
-    status: "coming-soon",
+    status: "available",
     // GST, \u091f\u0948\u0915\u094d\u0938, \u0915\u0930 = GST, tax, kar
     keywords: ["GST", "\u091f\u0948\u0915\u094d\u0938", "\u0915\u0930"],
   },
@@ -203,7 +203,7 @@ export const tools: Tool[] = [
     description: "\u092a\u094d\u0930\u0924\u093f\u0936\u0924 \u0915\u0948\u0932\u094d\u0915\u0941\u0932\u0947\u091f \u0915\u0930\u0947\u0902",
     category: "calculators",
     icon: "\u0025",
-    status: "coming-soon",
+    status: "available",
     // \u092a\u094d\u0930\u0924\u093f\u0936\u0924, \u092b\u0940\u0938\u0926\u0940, \u092a\u0930\u0938\u0947\u0902\u091f = pratishat, feesadi, percent
     keywords: ["\u092a\u094d\u0930\u0924\u093f\u0936\u0924", "\u092b\u0940\u0938\u0926\u0940", "\u092a\u0930\u0938\u0947\u0902\u091f"],
   },
@@ -215,7 +215,7 @@ export const tools: Tool[] = [
     description: "\u0905\u092a\u0928\u0940 \u0909\u092e\u094d\u0930 \u0915\u0948\u0932\u094d\u0915\u0941\u0932\u0947\u091f \u0915\u0930\u0947\u0902",
     category: "calculators",
     icon: "\u{1F382}",
-    status: "coming-soon",
+    status: "available",
     // \u0909\u092e\u094d\u0930, \u0906\u092f\u0941, \u091c\u0928\u094d\u092e = umr, aayu, janm
     keywords: ["\u0909\u092e\u094d\u0930", "\u0906\u092f\u0941", "\u091c\u0928\u094d\u092e"],
   },
@@ -223,25 +223,25 @@ export const tools: Tool[] = [
   // GOVERNMENT
   {
     slug: "pan-card-validator",
-    // PAN \u0915\u093e\u0930\u094d\u0921 \u0935\u0948\u0932\u093f\u0921\u0947\u091f\u0930 = PAN Card Validator
-    name: "PAN \u0915\u093e\u0930\u094d\u0921 \u0935\u0948\u0932\u093f\u0921\u0947\u091f\u0930",
-    // PAN \u0928\u0902\u092c\u0930 \u0935\u0948\u0932\u093f\u0921 \u0939\u0948 \u092f\u093e \u0928\u0939\u0940\u0902 \u091a\u0947\u0915 \u0915\u0930\u0947\u0902 = PAN number valid hai ya nahin check karen
-    description: "PAN \u0928\u0902\u092c\u0930 \u0935\u0948\u0932\u093f\u0921 \u0939\u0948 \u092f\u093e \u0928\u0939\u0940\u0902 \u091a\u0947\u0915 \u0915\u0930\u0947\u0902",
+    // PAN \u092b\u0949\u0930\u094d\u092e\u0947\u091f \u091a\u0947\u0915\u0930 = PAN Format Checker
+    name: "PAN \u092b\u0949\u0930\u094d\u092e\u0947\u091f \u091a\u0947\u0915\u0930",
+    // PAN \u0928\u0902\u092c\u0930 \u0915\u093e \u0932\u093f\u0916\u0928\u0947 \u0915\u093e \u092b\u0949\u0930\u094d\u092e\u0947\u091f \u091c\u093e\u0901\u091a\u0947\u0902 = PAN number ka likhne ka format jaanchen
+    description: "PAN \u0928\u0902\u092c\u0930 \u0915\u093e \u0932\u093f\u0916\u0928\u0947 \u0915\u093e \u092b\u0949\u0930\u094d\u092e\u0947\u091f \u091c\u093e\u0901\u091a\u0947\u0902",
     category: "government",
     icon: "\u{1F4B3}",
-    status: "coming-soon",
+    status: "available",
     // PAN, \u0935\u0948\u0932\u093f\u0921\u0947\u091f, \u091a\u0947\u0915 = PAN, validate, check
     keywords: ["PAN", "\u0935\u0948\u0932\u093f\u0921\u0947\u091f", "\u091a\u0947\u0915"],
   },
   {
     slug: "aadhaar-validator",
-    // \u0906\u0927\u093e\u0930 \u0935\u0948\u0932\u093f\u0921\u0947\u091f\u0930 = Aadhaar Validator
-    name: "\u0906\u0927\u093e\u0930 \u0935\u0948\u0932\u093f\u0921\u0947\u091f\u0930",
-    // \u0906\u0927\u093e\u0930 \u0928\u0902\u092c\u0930 \u0935\u0948\u0932\u093f\u0921 \u0939\u0948 \u092f\u093e \u0928\u0939\u0940\u0902 \u091a\u0947\u0915 \u0915\u0930\u0947\u0902 = Aadhaar number valid hai ya nahin check karen
-    description: "\u0906\u0927\u093e\u0930 \u0928\u0902\u092c\u0930 \u0935\u0948\u0932\u093f\u0921 \u0939\u0948 \u092f\u093e \u0928\u0939\u0940\u0902 \u091a\u0947\u0915 \u0915\u0930\u0947\u0902",
+    // \u0906\u0927\u093e\u0930 \u091a\u0947\u0915\u0938\u092e \u091a\u0947\u0915\u0930 = Aadhaar Checksum Checker
+    name: "\u0906\u0927\u093e\u0930 \u091a\u0947\u0915\u0938\u092e \u091a\u0947\u0915\u0930",
+    // 12-digit \u0938\u0902\u0930\u091a\u0928\u093e \u0914\u0930 \u091a\u0947\u0915\u0938\u092e \u091c\u093e\u0901\u091a\u0947\u0902 = 12-digit sanrachna aur checksum jaanchen
+    description: "12-digit \u0938\u0902\u0930\u091a\u0928\u093e \u0914\u0930 \u091a\u0947\u0915\u0938\u092e \u091c\u093e\u0901\u091a\u0947\u0902",
     category: "government",
     icon: "\u{1F4C7}",
-    status: "coming-soon",
+    status: "available",
     // \u0906\u0927\u093e\u0930, \u0935\u0948\u0932\u093f\u0921\u0947\u091f, \u091a\u0947\u0915 = Aadhaar, validate, check
     keywords: ["\u0906\u0927\u093e\u0930", "\u0935\u0948\u0932\u093f\u0921\u0947\u091f", "\u091a\u0947\u0915"],
   },
@@ -267,7 +267,7 @@ export const tools: Tool[] = [
     description: "\u091f\u0947\u0915\u094d\u0938\u094d\u091f \u092f\u093e URL \u0938\u0947 QR \u0915\u094b\u0921 \u092c\u0928\u093e\u090f\u0902",
     category: "utilities",
     icon: "\u{1F4F1}",
-    status: "coming-soon",
+    status: "available",
     // QR, \u0915\u094b\u0921, \u091c\u0928\u0930\u0947\u091f = QR, code, generate
     keywords: ["QR", "\u0915\u094b\u0921", "\u091c\u0928\u0930\u0947\u091f"],
   },
@@ -279,7 +279,7 @@ export const tools: Tool[] = [
     description: "\u092c\u093e\u0930\u0915\u094b\u0921 \u092c\u0928\u093e\u090f\u0902",
     category: "utilities",
     icon: "\u{1F3F7}",
-    status: "coming-soon",
+    status: "available",
     // \u092c\u093e\u0930\u0915\u094b\u0921, \u0915\u094b\u0921, \u091c\u0928\u0930\u0947\u091f = barcode, code, generate
     keywords: ["\u092c\u093e\u0930\u0915\u094b\u0921", "\u0915\u094b\u0921", "\u091c\u0928\u0930\u0947\u091f"],
   },
@@ -303,7 +303,7 @@ export const tools: Tool[] = [
     description: "\u092e\u091c\u092c\u0942\u0924 \u092a\u093e\u0938\u0935\u0930\u094d\u0921 \u092c\u0928\u093e\u090f\u0902",
     category: "utilities",
     icon: "\u{1F511}",
-    status: "coming-soon",
+    status: "available",
     // \u092a\u093e\u0938\u0935\u0930\u094d\u0921, \u092e\u091c\u092c\u0942\u0924, \u091c\u0928\u0930\u0947\u091f = password, majboot, generate
     keywords: ["\u092a\u093e\u0938\u0935\u0930\u094d\u0921", "\u092e\u091c\u092c\u0942\u0924", "\u091c\u0928\u0930\u0947\u091f"],
   },
@@ -315,7 +315,7 @@ export const tools: Tool[] = [
     description: "\u0930\u0902\u0917 \u091a\u0941\u0928\u0947\u0902 \u0914\u0930 \u0915\u094b\u0921 \u092a\u093e\u090f\u0902",
     category: "utilities",
     icon: "\u{1F3A8}",
-    status: "coming-soon",
+    status: "available",
     // \u0915\u0932\u0930, \u0930\u0902\u0917, hex = color, rang, hex
     keywords: ["\u0915\u0932\u0930", "\u0930\u0902\u0917", "hex"],
   },
