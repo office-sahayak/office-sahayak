@@ -1,7 +1,7 @@
 const popularTasks = [
   { href: "/tools/documents/hindi-krutidev-word", icon: "कृ", label: "PDF/JPG से Editable Hindi Word", tone: "bg-emerald-50" },
   { href: "/tools/documents/pdf-merge", icon: "📎", label: "PDF मर्ज", tone: "bg-rose-50" },
-  { href: "#tools", icon: "🧮", label: "EMI कैलकुलेटर", tone: "bg-amber-50" },
+  { href: "/tools/calculators/emi-calculator", icon: "🧮", label: "EMI कैलकुलेटर", tone: "bg-amber-50" },
 ];
 
 export function HeroSection() {
@@ -52,8 +52,8 @@ export function HeroSection() {
               ))}
             </div>
             <div className="mt-5 rounded-2xl bg-[#173f35] px-5 py-4 text-white">
-              <p className="text-sm font-semibold text-white/70">जल्द उपलब्ध</p>
-              <p className="mt-1 font-bold">25 उपयोगी टूल्स की पूरी लाइब्रेरी</p>
+              <p className="text-sm font-semibold text-white/70">अभी उपलब्ध</p>
+              <p className="mt-1 font-bold">23 उपयोगी टूल्स की पूरी लाइब्रेरी</p>
             </div>
           </div>
         </div>
