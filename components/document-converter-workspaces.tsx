@@ -125,6 +125,33 @@ async function waitForImages(element: HTMLElement) {
   }));
 }
 
+function makePdfCloneColorSafe(clonedElement: HTMLElement) {
+  const elements = [clonedElement, ...Array.from(clonedElement.querySelectorAll<HTMLElement>("*"))];
+  for (const element of elements) {
+    const isTableHeader = element.tagName === "TH"
+      || (element.tagName === "TD" && element.parentElement?.parentElement?.firstElementChild === element.parentElement);
+    const style = element.style;
+    style.setProperty("color", "#0f172a", "important");
+    style.setProperty("background-color", element === clonedElement ? "#ffffff" : isTableHeader ? "#f1f5f9" : "transparent", "important");
+    style.setProperty("background-image", "none", "important");
+    style.setProperty("border-color", "#94a3b8", "important");
+    style.setProperty("border-top-color", "#94a3b8", "important");
+    style.setProperty("border-right-color", "#94a3b8", "important");
+    style.setProperty("border-bottom-color", "#94a3b8", "important");
+    style.setProperty("border-left-color", "#94a3b8", "important");
+    style.setProperty("outline-color", "transparent", "important");
+    style.setProperty("text-decoration-color", "#0f172a", "important");
+    style.setProperty("text-emphasis-color", "#0f172a", "important");
+    style.setProperty("caret-color", "#0f172a", "important");
+    style.setProperty("column-rule-color", "#94a3b8", "important");
+    style.setProperty("box-shadow", "none", "important");
+    style.setProperty("text-shadow", "none", "important");
+    style.setProperty("filter", "none", "important");
+    style.setProperty("fill", "#0f172a", "important");
+    style.setProperty("stroke", "#0f172a", "important");
+  }
+}
+
 async function exportElementToPdf(
   element: HTMLElement,
   fileName: string,
@@ -157,6 +184,7 @@ async function exportElementToPdf(
       height: chunkHeight,
       logging: false,
       onclone: (_clonedDocument, clonedElement) => {
+        makePdfCloneColorSafe(clonedElement);
         clonedElement.style.setProperty("font-family", HINDI_FONT_STACK, "important");
         clonedElement.querySelectorAll<HTMLElement>("*").forEach((child) => {
           child.style.setProperty("font-family", HINDI_FONT_STACK, "important");
