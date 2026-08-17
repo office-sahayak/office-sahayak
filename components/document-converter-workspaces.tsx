@@ -1,17 +1,24 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, type CSSProperties } from "react";
 import { renderAsync as renderDocx } from "docx-preview";
 import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
 import JSZip from "jszip";
 import { krutiDevToUnicode } from "@/lib/tools/unicode-to-krutidev";
+import {
+  parseXlsx,
+  type ExcelBorderSide,
+  type ExcelCellStyle,
+  type ExcelMerge,
+  type ParsedSheet,
+  type ParsedWorkbook,
+} from "@/lib/tools/xlsx-preview";
 
 type PdfOrientation = "portrait" | "landscape";
 type WordPdfMode = "original" | "unicode";
 
 const PDF_RENDER_SCALE = 1.35;
-const PAGES_PER_RENDER = 3;
 const HINDI_FONT_STACK = '"Noto Sans Devanagari", "Nirmala UI", Mangal, sans-serif';
 const LEGACY_FONT_STACK = '"DevLys 010", "Kruti Dev 010", serif';
 const UNICODE_HINDI_FONT = "Noto Sans Devanagari";
@@ -227,72 +234,175 @@ async function exportWordPreviewToPdf(
   pdf.save(fileName);
 }
 
-async function exportElementToPdf(
-  element: HTMLElement,
+function excelPaperPoints(paperSize: number, orientation: PdfOrientation) {
+  const portrait = paperSize === 1 ? [612, 792]
+    : paperSize === 5 ? [612, 1008]
+      : paperSize === 8 ? [841.89, 1190.55]
+        : [595.28, 841.89];
+  return orientation === "landscape"
+    ? { width: Math.max(...portrait), height: Math.min(...portrait) }
+    : { width: Math.min(...portrait), height: Math.max(...portrait) };
+}
+
+function excelHeaderFooterText(source: string, pageNumber: number, totalPages: number, sheetName: string, fileName: string) {
+  const escapedAmpersand = "\u0000";
+  return source
+    .replace(/&&/gu, escapedAmpersand)
+    .replace(/&"[^"]*"/gu, "")
+    .replace(/&\d+/gu, "")
+    .replace(/&P/giu, String(pageNumber))
+    .replace(/&N/giu, String(totalPages))
+    .replace(/&A/giu, sheetName)
+    .replace(/&F/giu, fileName)
+    .replace(/&[BDTEUGSXY]/giu, "")
+    .replaceAll(escapedAmpersand, "&")
+    .trim();
+}
+
+function excelHeaderFooterSections(source: string, pageNumber: number, totalPages: number, sheetName: string, fileName: string) {
+  const sections = { left: "", center: "", right: "" };
+  let position: keyof typeof sections = "right";
+  for (const part of source.split(/(&[LCR])/giu)) {
+    if (/^&L$/iu.test(part)) position = "left";
+    else if (/^&C$/iu.test(part)) position = "center";
+    else if (/^&R$/iu.test(part)) position = "right";
+    else sections[position] += part;
+  }
+  return Object.fromEntries(Object.entries(sections).map(([key, value]) => [
+    key, excelHeaderFooterText(value, pageNumber, totalPages, sheetName, fileName),
+  ])) as typeof sections;
+}
+
+function addExcelHeaderFooter(
+  page: HTMLElement,
+  source: string,
+  location: "footer" | "header",
+  offsetPixels: number,
+  pageNumber: number,
+  totalPages: number,
+  sheetName: string,
+  fileName: string,
+) {
+  const sections = excelHeaderFooterSections(source, pageNumber, totalPages, sheetName, fileName);
+  for (const [position, text] of Object.entries(sections)) {
+    if (!text) continue;
+    const element = document.createElement("div");
+    element.textContent = text;
+    element.style.position = "absolute";
+    element.style[location === "header" ? "top" : "bottom"] = `${Math.max(4, offsetPixels - 9)}px`;
+    element.style.font = "14px Arial, sans-serif";
+    element.style.lineHeight = "18px";
+    element.style.whiteSpace = "pre";
+    element.style.backgroundColor = "#ffffff";
+    element.style.left = "32px";
+    element.style.right = "32px";
+    element.style.textAlign = position;
+    element.style.zIndex = "2147483647";
+    page.append(element);
+  }
+}
+
+async function exportExcelPreviewToPdf(
+  preview: HTMLElement,
+  sheet: ParsedSheet,
   fileName: string,
   orientation: PdfOrientation,
   onProgress?: (completedPages: number, totalPages: number) => void,
 ) {
-  await document.fonts.load(`400 16px ${HINDI_FONT_STACK}`, "हिन्दी कार्यालय सहायक");
+  await Promise.all([
+    document.fonts.load(`400 16px ${HINDI_FONT_STACK}`, "हिन्दी कार्यालय सहायक"),
+    document.fonts.load(`400 16px ${LEGACY_FONT_STACK}`, "lnL;rk lwph"),
+  ]);
   await document.fonts.ready;
-  await waitForImages(element);
+  const table = preview.querySelector<HTMLTableElement>("table[data-excel-table]");
+  const tableBody = table?.tBodies[0];
+  if (!table || !tableBody) throw new Error("Excel preview में printable table नहीं मिली।");
+  const rowElements = Array.from(tableBody.rows);
+  if (!rowElements.length) throw new Error("इस sheet में PDF बनाने योग्य data नहीं है।");
 
-  const width = Math.ceil(Math.max(element.scrollWidth, element.clientWidth));
-  const height = Math.ceil(Math.max(element.scrollHeight, element.clientHeight));
-  if (!width || !height || width > 6000) throw new Error("Document की चौड़ाई PDF बनाने के लिए बहुत अधिक है।");
+  const paper = excelPaperPoints(sheet.page.paperSize, orientation);
+  const pageWidthPixels = paper.width / 0.75;
+  const pageHeightPixels = paper.height / 0.75;
+  const marginLeftPixels = sheet.page.marginLeftInches * 96;
+  const marginRightPixels = sheet.page.marginRightInches * 96;
+  const marginTopPixels = sheet.page.marginTopInches * 96;
+  const marginBottomPixels = sheet.page.marginBottomInches * 96;
+  const tableWidthPixels = table.getBoundingClientRect().width;
+  const printableWidthPixels = pageWidthPixels - marginLeftPixels - marginRightPixels;
+  const printableHeightPixels = pageHeightPixels - marginTopPixels - marginBottomPixels;
+  const contentScale = Math.min(1, printableWidthPixels / Math.max(1, tableWidthPixels));
+  const sourcePageHeight = printableHeightPixels / Math.max(0.01, contentScale);
+  const tolerancePixels = 10 / 0.75 / Math.max(0.01, contentScale);
+  const manualBreaks = new Set(sheet.manualRowBreaks);
+  const groups: Array<{ start: number; end: number }> = [];
+  let start = 0;
+  let accumulatedHeight = 0;
 
-  const pdf = new jsPDF({ orientation, unit: "pt", format: "a4", compress: true });
-  const pageWidth = pdf.internal.pageSize.getWidth();
-  const pageHeight = pdf.internal.pageSize.getHeight();
-  const margin = 24;
-  const printableWidth = pageWidth - margin * 2;
-  const printableHeight = pageHeight - margin * 2;
-  const sourcePageHeight = Math.max(1, Math.floor(width * printableHeight / printableWidth));
-  const totalPages = Math.ceil(height / sourcePageHeight);
-  if (totalPages > 300) throw new Error("इस document में 300 से अधिक PDF pages बन रहे हैं। कृपया इसे दो files में बाँटें।");
-
-  for (let firstPage = 0; firstPage < totalPages; firstPage += PAGES_PER_RENDER) {
-    const sourceY = firstPage * sourcePageHeight;
-    const chunkHeight = Math.min(sourcePageHeight * PAGES_PER_RENDER, height - sourceY);
-    const chunkCanvas = await html2canvas(element, {
-      backgroundColor: "#ffffff",
-      height: chunkHeight,
-      logging: false,
-      onclone: (clonedDocument, clonedElement) => makePdfCloneColorSafe(clonedDocument, clonedElement),
-      scale: PDF_RENDER_SCALE,
-      useCORS: false,
-      width,
-      windowHeight: chunkHeight,
-      windowWidth: width,
-      y: sourceY,
-    });
-    const renderedScale = chunkCanvas.width / width;
-    const pagesInChunk = Math.min(PAGES_PER_RENDER, totalPages - firstPage);
-
-    for (let offset = 0; offset < pagesInChunk; offset += 1) {
-      const pageNumber = firstPage + offset;
-      const pageSourceY = offset * sourcePageHeight;
-      const remainingHeight = height - pageNumber * sourcePageHeight;
-      const pageSourceHeight = Math.min(sourcePageHeight, remainingHeight);
-      const pixelY = Math.round(pageSourceY * renderedScale);
-      const pixelHeight = Math.max(1, Math.min(chunkCanvas.height - pixelY, Math.ceil(pageSourceHeight * renderedScale)));
-      const pageCanvas = document.createElement("canvas");
-      pageCanvas.width = chunkCanvas.width;
-      pageCanvas.height = Math.max(1, pixelHeight);
-      const context = pageCanvas.getContext("2d");
-      if (!context) throw new Error("PDF page तैयार नहीं हो सका।");
-      context.fillStyle = "#ffffff";
-      context.fillRect(0, 0, pageCanvas.width, pageCanvas.height);
-      context.drawImage(chunkCanvas, 0, pixelY, chunkCanvas.width, pixelHeight, 0, 0, pageCanvas.width, pixelHeight);
-      const renderedHeight = pageSourceHeight * printableWidth / width;
-      if (pageNumber > 0) pdf.addPage();
-      pdf.addImage(pageCanvas.toDataURL("image/jpeg", 0.92), "JPEG", margin, margin, printableWidth, renderedHeight, undefined, "FAST");
-      pageCanvas.width = 1;
-      pageCanvas.height = 1;
-      onProgress?.(pageNumber + 1, totalPages);
+  for (let index = 0; index < rowElements.length; index += 1) {
+    const rowNumber = Number(rowElements[index].dataset.rowNumber ?? 0);
+    const rowHeight = rowElements[index].getBoundingClientRect().height;
+    const manualBreak = index > start && manualBreaks.has(rowNumber - 1);
+    if (index > start && (manualBreak || accumulatedHeight + rowHeight > sourcePageHeight + tolerancePixels)) {
+      groups.push({ start, end: index - 1 });
+      start = index;
+      accumulatedHeight = 0;
     }
-    chunkCanvas.width = 1;
-    chunkCanvas.height = 1;
+    accumulatedHeight += rowHeight;
+  }
+  groups.push({ start, end: rowElements.length - 1 });
+  if (groups.length > 300) throw new Error("इस sheet में 300 से अधिक PDF pages बन रहे हैं। कृपया इसे दो files में बाँटें।");
+
+  const pdf = new jsPDF({ orientation, unit: "pt", format: [paper.width, paper.height], compress: true });
+  for (let pageIndex = 0; pageIndex < groups.length; pageIndex += 1) {
+    const group = groups[pageIndex];
+    const page = document.createElement("div");
+    page.style.background = "#ffffff";
+    page.style.height = `${pageHeightPixels}px`;
+    page.style.left = "-12000px";
+    page.style.overflow = "hidden";
+    page.style.position = "fixed";
+    page.style.top = "0";
+    page.style.width = `${pageWidthPixels}px`;
+
+    const content = document.createElement("div");
+    content.style.left = `${marginLeftPixels}px`;
+    content.style.position = "absolute";
+    content.style.top = `${marginTopPixels}px`;
+    content.style.transform = `scale(${contentScale})`;
+    content.style.transformOrigin = "top left";
+    content.style.width = `${tableWidthPixels}px`;
+    const clonedTable = table.cloneNode(true) as HTMLTableElement;
+    clonedTable.style.margin = "0";
+    clonedTable.style.width = `${tableWidthPixels}px`;
+    Array.from(clonedTable.tBodies[0].rows).forEach((row, index) => {
+      if (index < group.start || index > group.end) row.remove();
+    });
+    content.append(clonedTable);
+    page.append(content);
+    addExcelHeaderFooter(page, sheet.page.oddHeader, "header", sheet.page.headerMarginInches * 96, pageIndex + 1, groups.length, sheet.name, fileName);
+    addExcelHeaderFooter(page, sheet.page.oddFooter, "footer", sheet.page.footerMarginInches * 96, pageIndex + 1, groups.length, sheet.name, fileName);
+    document.body.append(page);
+
+    try {
+      const canvas = await html2canvas(page, {
+        backgroundColor: "#ffffff",
+        height: Math.ceil(pageHeightPixels),
+        logging: false,
+        onclone: (clonedDocument, clonedElement) => makePdfCloneColorSafe(clonedDocument, clonedElement),
+        scale: PDF_RENDER_SCALE,
+        useCORS: false,
+        width: Math.ceil(pageWidthPixels),
+        windowHeight: Math.ceil(pageHeightPixels),
+        windowWidth: Math.ceil(pageWidthPixels),
+      });
+      if (pageIndex > 0) pdf.addPage([paper.width, paper.height], orientation);
+      pdf.addImage(canvas.toDataURL("image/jpeg", 0.94), "JPEG", 0, 0, paper.width, paper.height, undefined, "FAST");
+      canvas.width = 1;
+      canvas.height = 1;
+      onProgress?.(pageIndex + 1, groups.length);
+    } finally {
+      page.remove();
+    }
   }
   pdf.save(fileName);
 }
@@ -415,9 +525,6 @@ export function WordToPdfWorkspace() {
   );
 }
 
-interface ParsedSheet { name: string; rows: string[][] }
-interface ParsedWorkbook { sheets: ParsedSheet[]; truncated: boolean }
-
 function localElements(parent: Document | Element, name: string) {
   return Array.from(parent.getElementsByTagNameNS("*", name));
 }
@@ -428,98 +535,100 @@ function parseXml(source: string) {
   return documentNode;
 }
 
-function columnIndex(reference: string) {
-  const letters = reference.match(/^[A-Z]+/iu)?.[0].toUpperCase() ?? "A";
-  return Array.from(letters).reduce((total, letter) => total * 26 + letter.charCodeAt(0) - 64, 0) - 1;
+function excelBorderCss(border: ExcelBorderSide | undefined) {
+  if (!border) return undefined;
+  const width = border.style === "hair" ? "1px"
+    : /medium/iu.test(border.style) ? "2px"
+      : /thick/iu.test(border.style) ? "3px"
+        : "1px";
+  const style = border.style === "double" ? "double"
+    : /dash|dot/iu.test(border.style) ? "dashed"
+      : "solid";
+  return `${width} ${style} ${border.color}`;
 }
 
-function looksLikeDateFormat(format: string) {
-  return /(^|[^\\])[dmyhs]/iu.test(format.replace(/\[[^\]]+\]/gu, ""));
+function excelCellCss(style: ExcelCellStyle, value: string): CSSProperties {
+  const isLegacy = /devlys|kruti\s*dev/iu.test(style.fontFamily);
+  const fallbackBorder = style.hasBorder ? "1px solid #000000" : undefined;
+  return {
+    backgroundColor: style.backgroundColor,
+    borderBottom: excelBorderCss(style.borderBottom) ?? fallbackBorder,
+    borderLeft: excelBorderCss(style.borderLeft) ?? fallbackBorder,
+    borderRight: excelBorderCss(style.borderRight) ?? fallbackBorder,
+    borderTop: excelBorderCss(style.borderTop) ?? fallbackBorder,
+    boxSizing: "border-box",
+    color: style.color,
+    fontFamily: isLegacy ? `"${style.fontFamily}", ${LEGACY_FONT_STACK}` : `"${style.fontFamily}", Arial, sans-serif`,
+    fontSize: `${style.fontSizePoints}pt`,
+    fontStyle: style.italic ? "italic" : "normal",
+    fontWeight: style.bold ? 700 : 400,
+    lineHeight: isLegacy ? 1.2 : 1.05,
+    overflow: style.wrapText ? "hidden" : "visible",
+    overflowWrap: style.wrapText ? (isLegacy ? "normal" : "break-word") : undefined,
+    padding: "0 2px",
+    textAlign: style.horizontal ?? (/^-?\d+(?:\.\d+)?%?$/u.test(value.trim()) ? "right" : "left"),
+    textDecoration: style.underline ? "underline" : undefined,
+    textOverflow: style.shrinkToFit ? "clip" : undefined,
+    verticalAlign: style.vertical,
+    whiteSpace: style.wrapText ? "pre-wrap" : "pre",
+    wordBreak: style.wrapText ? "normal" : undefined,
+  };
 }
 
-function excelDate(serial: number, includeTime: boolean) {
-  const milliseconds = Date.UTC(1899, 11, 30) + serial * 86_400_000;
-  const date = new Date(milliseconds);
-  const day = String(date.getUTCDate()).padStart(2, "0");
-  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-  const year = date.getUTCFullYear();
-  if (!includeTime) return `${day}/${month}/${year}`;
-  return `${day}/${month}/${year} ${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")}`;
-}
-
-async function parseXlsx(file: File): Promise<ParsedWorkbook> {
-  const zip = await JSZip.loadAsync(await file.arrayBuffer());
-  const workbookSource = await zip.file("xl/workbook.xml")?.async("string");
-  const relationshipsSource = await zip.file("xl/_rels/workbook.xml.rels")?.async("string");
-  if (!workbookSource || !relationshipsSource) throw new Error("यह सही .xlsx workbook नहीं है।");
-
-  const workbook = parseXml(workbookSource);
-  const relationships = parseXml(relationshipsSource);
-  const relationshipMap = new Map(localElements(relationships, "Relationship").map((element) => [element.getAttribute("Id") ?? "", element.getAttribute("Target") ?? ""]));
-  const sheetMeta = localElements(workbook, "sheet").map((element) => ({
-    name: element.getAttribute("name") ?? "Sheet",
-    relationshipId: element.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id") ?? element.getAttribute("r:id") ?? "",
-  }));
-
-  const sharedStringsSource = await zip.file("xl/sharedStrings.xml")?.async("string");
-  const sharedStrings = sharedStringsSource
-    ? localElements(parseXml(sharedStringsSource), "si").map((item) => localElements(item, "t").map((text) => text.textContent ?? "").join(""))
-    : [];
-
-  const customFormats = new Map<number, string>();
-  const styleFormats: number[] = [];
-  const stylesSource = await zip.file("xl/styles.xml")?.async("string");
-  if (stylesSource) {
-    const styles = parseXml(stylesSource);
-    localElements(styles, "numFmt").forEach((element) => customFormats.set(Number(element.getAttribute("numFmtId")), element.getAttribute("formatCode") ?? ""));
-    const cellXfs = localElements(styles, "cellXfs")[0];
-    if (cellXfs) localElements(cellXfs, "xf").forEach((element) => styleFormats.push(Number(element.getAttribute("numFmtId") ?? 0)));
-  }
-
-  let truncated = false;
-  const sheets: ParsedSheet[] = [];
-  for (const metadata of sheetMeta) {
-    const target = relationshipMap.get(metadata.relationshipId);
-    if (!target) continue;
-    const path = target.startsWith("/") ? target.slice(1) : `xl/${target.replace(/^\.\.\//u, "")}`;
-    const sheetSource = await zip.file(path)?.async("string");
-    if (!sheetSource) continue;
-    const sheet = parseXml(sheetSource);
-    const cells = localElements(sheet, "c");
-    const rows: string[][] = [];
-    for (const cell of cells) {
-      const reference = cell.getAttribute("r") ?? "A1";
-      const rowIndex = Math.max(0, Number(reference.match(/\d+$/u)?.[0] ?? 1) - 1);
-      const colIndex = columnIndex(reference);
-      if (rowIndex >= 250 || colIndex >= 40) { truncated = true; continue; }
-      while (rows.length <= rowIndex) rows.push([]);
-      while (rows[rowIndex].length <= colIndex) rows[rowIndex].push("");
-      const type = cell.getAttribute("t") ?? "n";
-      const valueElement = localElements(cell, "v")[0];
-      const raw = valueElement?.textContent ?? "";
-      let value = raw;
-      if (type === "s") value = sharedStrings[Number(raw)] ?? "";
-      else if (type === "inlineStr") value = localElements(cell, "t").map((item) => item.textContent ?? "").join("");
-      else if (type === "b") value = raw === "1" ? "TRUE" : "FALSE";
-      else if (type === "e") value = `Error: ${raw}`;
-      else if (raw && Number.isFinite(Number(raw))) {
-        const styleIndex = Number(cell.getAttribute("s") ?? 0);
-        const formatId = styleFormats[styleIndex] ?? 0;
-        const format = customFormats.get(formatId) ?? "";
-        const builtInDate = (formatId >= 14 && formatId <= 22) || (formatId >= 45 && formatId <= 47);
-        if (builtInDate || looksLikeDateFormat(format)) value = excelDate(Number(raw), /[hs]/iu.test(format) || (formatId >= 18 && formatId <= 22));
+function excelMergeMaps(sheet: ParsedSheet) {
+  const anchors = new Map<string, ExcelMerge>();
+  const covered = new Set<string>();
+  for (const merge of sheet.merges) {
+    anchors.set(`${merge.startRow}:${merge.startColumn}`, merge);
+    for (let row = merge.startRow; row <= merge.endRow; row += 1) {
+      for (let column = merge.startColumn; column <= merge.endColumn; column += 1) {
+        if (row !== merge.startRow || column !== merge.startColumn) covered.add(`${row}:${column}`);
       }
-      rows[rowIndex][colIndex] = value;
     }
-    const usedRows = rows.map((row) => {
-      const last = row.findLastIndex((value) => value !== "");
-      return last >= 0 ? row.slice(0, last + 1) : [];
-    });
-    while (usedRows.length && usedRows[usedRows.length - 1].length === 0) usedRows.pop();
-    sheets.push({ name: metadata.name, rows: usedRows });
   }
-  if (!sheets.length) throw new Error("Workbook में कोई readable sheet नहीं मिली।");
-  return { sheets, truncated };
+  return { anchors, covered };
+}
+
+function ExcelSheetPreview({ sheet, styles }: { sheet: ParsedSheet; styles: ExcelCellStyle[] }) {
+  const { anchors, covered } = excelMergeMaps(sheet);
+  const width = sheet.columnWidthsPixels.reduce((total, columnWidth) => total + columnWidth, 0);
+  return (
+    <table data-excel-table className="bg-white" style={{ borderCollapse: "collapse", tableLayout: "fixed", width: `${width}px` }}>
+      <colgroup>
+        {sheet.columnWidthsPixels.map((columnWidth, index) => <col key={index} style={{ width: `${columnWidth}px` }} />)}
+      </colgroup>
+      <tbody>
+        {sheet.rows.map((row) => {
+          const fixedHeight = row.customHeight ? row.heightPoints : undefined;
+          return (
+            <tr key={row.index} data-row-number={row.index + 1} style={{ display: row.hidden ? "none" : undefined, height: fixedHeight ? `${fixedHeight}pt` : undefined }}>
+              {Array.from({ length: sheet.maxColumn - sheet.minColumn + 1 }, (_, relativeColumn) => {
+                const column = sheet.minColumn + relativeColumn;
+                const key = `${row.index}:${column}`;
+                if (covered.has(key)) return null;
+                const cell = row.cells[column] ?? { styleIndex: 0, value: "" };
+                const style = styles[cell.styleIndex] ?? styles[0];
+                const merge = anchors.get(key);
+                return (
+                  <td
+                    key={column}
+                    colSpan={merge ? merge.endColumn - merge.startColumn + 1 : undefined}
+                    rowSpan={merge ? merge.endRow - merge.startRow + 1 : undefined}
+                    style={{ ...excelCellCss(style, cell.value), height: fixedHeight ? `${fixedHeight}pt` : undefined }}
+                  >
+                    <span style={{
+                      position: "relative",
+                      zIndex: cell.value ? 1 : undefined,
+                    }}>{cell.value}</span>
+                  </td>
+                );
+              })}
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
 }
 
 export function ExcelToPdfWorkspace() {
@@ -539,18 +648,36 @@ export function ExcelToPdfWorkspace() {
     setIsWorking(true);
     try {
       const parsed = await parseXlsx(selected);
-      setFile(selected); setWorkbook(parsed); setSheetIndex(0);
-      setMessage(parsed.truncated ? "Preview तैयार है। बड़ी sheet में पहली 250 rows और 40 columns लिए गए हैं।" : "Workbook तैयार है। Sheet चुनकर PDF download करें।");
+      const firstDataSheet = Math.max(0, parsed.sheets.findIndex((sheet) => sheet.hasData));
+      setFile(selected); setWorkbook(parsed); setSheetIndex(firstDataSheet);
+      setOrientation(parsed.sheets[firstDataSheet]?.page.orientation ?? "landscape");
+      const ignored = parsed.sheets.reduce((total, sheet) => total + sheet.ignoredOutlierCells, 0);
+      setMessage(ignored
+        ? "Excel का मूल layout तैयार है। मुख्य table से बहुत दूर पड़े बिखरे हुए cells PDF में शामिल नहीं किए जाएँगे।"
+        : "Excel का मूल layout और print setting तैयार है। Sheet चुनकर PDF download करें।");
     } catch (caughtError) { setFile(null); setWorkbook(null); setError(caughtError instanceof Error ? caughtError.message : "Excel file नहीं खुल सकी।"); }
     finally { setIsWorking(false); }
   }
 
+  function changeSheet(nextIndex: number) {
+    setSheetIndex(nextIndex);
+    const nextSheet = workbook?.sheets[nextIndex];
+    if (nextSheet) setOrientation(nextSheet.page.orientation);
+  }
+
   async function makePdf() {
-    if (!file || !workbook || !previewRef.current) return;
-    setIsWorking(true); setError(""); setMessage("PDF तैयार हो रही है…");
+    const activeSheet = workbook?.sheets[sheetIndex];
+    if (!file || !activeSheet || !previewRef.current) return;
+    setIsWorking(true); setError(""); setMessage("PDF pages तैयार हो रहे हैं…");
     try {
-      const sheetName = workbook.sheets[sheetIndex]?.name.replace(/[^a-z0-9\u0900-\u097f_-]+/giu, "-") || "sheet";
-      await exportElementToPdf(previewRef.current, `${file.name.replace(/\.xlsx$/iu, "")}-${sheetName}.pdf`, orientation);
+      const sheetName = activeSheet.name.replace(/[^a-z0-9\u0900-\u097f_-]+/giu, "-") || "sheet";
+      await exportExcelPreviewToPdf(
+        previewRef.current,
+        activeSheet,
+        `${file.name.replace(/\.xlsx$/iu, "")}-${sheetName}.pdf`,
+        orientation,
+        (completed, total) => setMessage(`PDF page ${completed}/${total} तैयार हो गया…`),
+      );
       setMessage("Excel sheet की PDF download हो गई।");
     } catch (caughtError) { setError(caughtError instanceof Error ? caughtError.message : "PDF नहीं बन सकी।"); setMessage(""); }
     finally { setIsWorking(false); }
@@ -562,12 +689,13 @@ export function ExcelToPdfWorkspace() {
     <div className="grid gap-7 lg:grid-cols-[1fr_320px]">
       <section className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-xl shadow-slate-200/50 sm:p-8">
         <label className="block cursor-pointer rounded-3xl border-2 border-dashed border-slate-300 bg-[#f8faf9] px-6 py-10 text-center hover:border-[#7aa596]"><span className="text-4xl" aria-hidden="true">📊</span><strong className="mt-3 block text-xl">Excel file चुनें</strong><span className="mt-2 block text-sm text-slate-500">.xlsx • अधिकतम 20 MB</span><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="sr-only" disabled={isWorking} onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void selectFile(selected); event.target.value = ""; }} /></label>
-        {workbook && <div className="mt-6 grid gap-4 rounded-2xl border border-slate-200 p-4 sm:grid-cols-2"><label className="text-sm font-extrabold text-slate-700">Sheet<select value={sheetIndex} onChange={(event) => setSheetIndex(Number(event.target.value))} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3"><option value="" disabled>Sheet चुनें</option>{workbook.sheets.map((sheet, index) => <option key={`${sheet.name}-${index}`} value={index}>{sheet.name}</option>)}</select></label><label className="text-sm font-extrabold text-slate-700">Page<select value={orientation} onChange={(event) => setOrientation(event.target.value as PdfOrientation)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3"><option value="landscape">Landscape</option><option value="portrait">Portrait</option></select></label></div>}
-        {activeSheet && <div className="mt-7"><div className="mb-3 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-black text-slate-950">{activeSheet.name}</h2><p className="text-xs text-slate-500">{activeSheet.rows.length} rows preview</p></div><button type="button" onClick={() => void makePdf()} disabled={isWorking || !activeSheet.rows.length} className="rounded-full bg-[#173f35] px-6 py-3 font-black text-white disabled:opacity-50">{isWorking ? "तैयार हो रही है…" : "PDF Download करें"}</button></div><div className="max-h-[42rem] overflow-auto rounded-2xl border border-slate-300 bg-slate-100 p-3"><div ref={previewRef} className="inline-block min-h-80 min-w-[1000px] bg-white p-8 text-sm text-slate-950"><h2 className="mb-5 text-xl font-black">{activeSheet.name}</h2>{activeSheet.rows.length ? <table className="border-collapse"><tbody>{activeSheet.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((value, colIndex) => <td key={colIndex} className={`min-w-28 whitespace-pre-wrap border border-slate-400 px-3 py-2 align-top ${rowIndex === 0 ? "bg-slate-100 font-bold" : ""}`}>{value}</td>)}</tr>)}</tbody></table> : <p className="text-slate-500">इस sheet में data नहीं है।</p>}</div></div></div>}
+        {file && <div className="mt-5 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 p-4"><div className="min-w-0"><strong className="block truncate text-slate-900">{file.name}</strong><span className="text-xs font-semibold text-slate-500">{formatBytes(file.size)}</span></div><span className="rounded-full bg-emerald-50 px-3 py-2 text-xs font-extrabold text-emerald-800">Excel layout सुरक्षित</span></div>}
+        {workbook && <div className="mt-5 grid gap-4 rounded-2xl border border-slate-200 p-4 sm:grid-cols-2"><label className="text-sm font-extrabold text-slate-700">Sheet<select value={sheetIndex} onChange={(event) => changeSheet(Number(event.target.value))} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3">{workbook.sheets.map((sheet, index) => <option key={`${sheet.name}-${index}`} value={index}>{sheet.name}{sheet.hasData ? "" : " (खाली)"}</option>)}</select></label><label className="text-sm font-extrabold text-slate-700">Page<select value={orientation} onChange={(event) => setOrientation(event.target.value as PdfOrientation)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3"><option value="landscape">Landscape</option><option value="portrait">Portrait</option></select></label></div>}
+        {activeSheet && <div className="mt-7"><div className="mb-3 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-black text-slate-950">{activeSheet.name}</h2><p className="text-xs text-slate-500">{activeSheet.rows.length} rows • {activeSheet.columnWidthsPixels.length} columns • page setting Excel file से</p></div><button type="button" onClick={() => void makePdf()} disabled={isWorking || !activeSheet.hasData} className="rounded-full bg-[#173f35] px-6 py-3 font-black text-white disabled:opacity-50">{isWorking ? "तैयार हो रही है…" : "PDF Download करें"}</button></div><div className="max-h-[42rem] overflow-auto rounded-2xl border border-slate-300 bg-slate-200 p-3"><div ref={previewRef} className="inline-block min-h-80 min-w-full bg-white text-slate-950">{activeSheet.hasData ? <ExcelSheetPreview sheet={activeSheet} styles={workbook?.styles ?? []} /> : <p className="p-8 text-slate-500">इस sheet में data नहीं है।</p>}</div></div></div>}
         {error && <p className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{error}</p>}
         {message && <p className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold leading-6 text-emerald-800">{message}</p>}
       </section>
-      <PrivacyAside note="यह tool .xlsx की cell values और basic table layout बनाता है। Charts, macros, conditional formatting, merged-cell design और exact print settings पूरी तरह समान नहीं रह सकते।" />
+      <PrivacyAside note="Excel की column widths, row heights, fonts, borders, merged cells, margins, page orientation और header/footer browser में पढ़े जाते हैं। बहुत दूर पड़े बिखरे cells मुख्य table से अलग माने जाते हैं।" />
     </div>
   );
 }
