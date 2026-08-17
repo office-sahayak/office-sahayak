@@ -57,9 +57,44 @@ for (let index = 0; index < krutiGlyphs.length; index += 1) {
   if (legacy !== unicode) legacyToUnicode.set(legacy, unicode);
 }
 
+// Kruti Dev 010 contains several alternate key sequences for the same glyph.
+// They are common in older government-office documents, but cannot be derived
+// by simply reversing the preferred Unicode -> Kruti Dev table above.
+const legacyAliases = [
+  ["ñ", "॰"],
+  [")Z", "र्द्ध"],
+  ["‘", '"'], ["’", '"'], ["“", "'"], ["”", "'"],
+  ["¶+", "फ़्"], ["d+", "क़"], ["[+k", "ख़"], ["[+", "ख़्"],
+  ["x+", "ग़"], ["T+", "ज़्"], ["t+", "ज़"], ["Q+", "फ़"],
+  [";+", "य़"], ["j+", "ऱ"], ["u+", "ऩ"],
+  ["é", "न्न"], ["™", "न्न्"], ["nzZ", "र्द्र"], ["Á", "प्र"],
+  ["b±", "ईं"], ["Ã", "ई"],
+  ["Dk", "क"], ["Xk", "ग"], ["Ä", "घ"], ["Pk", "च"],
+  ["Tk", "ज"], ["Rk", "त"], ["èk", "ध"], ["Ë", "ध्"],
+  ["è", "ध्"], ["Uk", "न"], ["Ik", "प"], ["Ck", "ब"],
+  ["Ek", "म"], ["Yk", "ल"], ["Ok", "व"], ["Lk", "स"],
+  ["È", "ीं"], ["z", "्र"],
+  ["Ì", "द्द"], ["Í", "ट्ट"], ["Î", "ट्ठ"], ["Ï", "ड्ड"],
+  ["Ñ", "कृ"], ["Ò", "भ"], ["Ó", "्य"], ["Ô", "ड्ढ"],
+  ["Ö", "झ्"], ["Ük", "श"], ["Ü", "श्"],
+  ["•", "ऽ"], ["∙", "ऽ"], ["~j", "्र"], ["+", "़"],
+  [" ः", ":"], ["(", ";"], ["@", "/"],
+] as const;
+
+for (const [legacy, unicode] of legacyAliases) legacyToUnicode.set(legacy, unicode);
+
 // Kruti Dev uses the same glyph for a rare micro sign and a normal hyphen.
 // Office documents overwhelmingly intend a hyphen (for example, 2025-26).
 legacyToUnicode.set("&", "-");
+
+const legacyCorrections = [
+  ["Q+Z", "QZ+"],
+  ["sas", "sa"],
+  ["aa", "a"],
+  ["ZZ", "Z"],
+  ["=kk", "=k"],
+  ["f=k", "f="],
+] as const;
 
 const legacyPattern = new RegExp(
   Array.from(legacyToUnicode.keys())
@@ -70,8 +105,10 @@ const legacyPattern = new RegExp(
 );
 const devanagariConsonant = "[\\u0915-\\u0939\\u0958-\\u095f]";
 const consonantCluster = `(?:${devanagariConsonant}\\u093c?\\u094d)*${devanagariConsonant}\\u093c?`;
+const shortIAnusvaraMarkerPattern = new RegExp(`f([\\u0901\\u0902])(${consonantCluster})`, "gu");
 const shortIMarkerPattern = new RegExp(`f(${consonantCluster})`, "gu");
 const rephMarkerPattern = new RegExp(`(${consonantCluster}[\\u0901-\\u0903\\u093a\\u093b\\u093e-\\u094c\\u094e\\u094f]*)Z`, "gu");
+const nasalBeforeMatraPattern = /([ँं])([ािीुूृॄॅेैोौ])/gu;
 
 function moveShortI(text: string) {
   let value = text;
@@ -135,9 +172,26 @@ export function unicodeToKrutiDev(text: string) {
 export function krutiDevToUnicode(text: string) {
   if (!text) return "";
 
-  let converted = text.replace(legacyPattern, (legacy) => legacyToUnicode.get(legacy) ?? legacy);
+  let converted = text;
+  for (const [incorrect, corrected] of legacyCorrections) {
+    converted = converted.split(incorrect).join(corrected);
+  }
+
+  converted = converted.replace(legacyPattern, (legacy) => legacyToUnicode.get(legacy) ?? legacy);
+
+  // These positional glyphs are handled after the ordinary lookup so the
+  // marker letters inserted here are not mistaken for literal legacy text.
+  converted = converted
+    .replace(/±/gu, "Zं")
+    .replace(/Æ/gu, "र्f")
+    .replace(/Ç/gu, "fं")
+    .replace(/É/gu, "र्fं")
+    .replace(/Ê/gu, "ीZ");
+
+  converted = converted.replace(shortIAnusvaraMarkerPattern, "$2ि$1");
   converted = converted.replace(shortIMarkerPattern, "$1ि");
   converted = converted.replace(rephMarkerPattern, "र्$1");
+  converted = converted.replace(nasalBeforeMatraPattern, "$2$1");
   return converted.normalize("NFC");
 }
 

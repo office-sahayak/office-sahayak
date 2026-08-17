@@ -1,55 +1,28 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { renderAsync as renderDocx } from "docx-preview";
 import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
 import JSZip from "jszip";
-import mammoth from "mammoth";
 import { krutiDevToUnicode } from "@/lib/tools/unicode-to-krutidev";
 
 type PdfOrientation = "portrait" | "landscape";
+type WordPdfMode = "original" | "unicode";
 
 const PDF_RENDER_SCALE = 1.35;
 const PAGES_PER_RENDER = 3;
 const HINDI_FONT_STACK = '"Noto Sans Devanagari", "Nirmala UI", Mangal, sans-serif';
+const LEGACY_FONT_STACK = '"DevLys 010", "Kruti Dev 010", serif';
+const UNICODE_HINDI_FONT = "Noto Sans Devanagari";
+const WORD_PREVIEW_CLASS = "office-word-docx";
 
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-function sanitizeDocumentHtml(source: string) {
-  const documentNode = new DOMParser().parseFromString(source, "text/html");
-  documentNode.querySelectorAll("script, iframe, object, embed, form, input, button, textarea, select, link, style, meta").forEach((node) => node.remove());
-  documentNode.querySelectorAll("*").forEach((element) => {
-    for (const attribute of Array.from(element.attributes)) {
-      const name = attribute.name.toLowerCase();
-      const value = attribute.value.trim().toLowerCase();
-      if (name.startsWith("on") || name === "srcdoc" || name === "formaction") element.removeAttribute(attribute.name);
-      if ((name === "href" || name === "src") && (value.startsWith("javascript:") || value.startsWith("vbscript:"))) element.removeAttribute(attribute.name);
-      if (name === "style" && /url\s*\(|expression\s*\(/iu.test(value)) element.removeAttribute(attribute.name);
-    }
-  });
-  return documentNode.body.innerHTML;
-}
-
 type WordFontKind = "legacy" | "modern" | undefined;
-type WordTextAlignment = "left" | "center" | "right" | "justify";
-
-interface WordParagraphProperties {
-  afterTwips?: number;
-  alignment?: WordTextAlignment;
-  beforeTwips?: number;
-  endTwips?: number;
-  firstLineTwips?: number;
-  hangingTwips?: number;
-  lineHeight?: string;
-  startTwips?: number;
-}
-
-interface WordParagraphFormat extends WordParagraphProperties {
-  text: string;
-}
 
 const WORDPROCESSING_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
@@ -66,94 +39,23 @@ function classifyWordFonts(element: Element | undefined): WordFontKind {
   return names.some((name) => /kruti\s*dev|devlys/iu.test(name)) ? "legacy" : "modern";
 }
 
-function optionalNumber(value: string) {
-  const parsed = Number(value);
-  return value !== "" && Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function wordAlignment(value: string): WordTextAlignment | undefined {
-  if (value === "center") return "center";
-  if (value === "right" || value === "end") return "right";
-  if (value === "both" || value === "distribute" || value === "thaiDistribute") return "justify";
-  if (value === "left" || value === "start") return "left";
-  return undefined;
-}
-
-function readWordParagraphProperties(paragraphProperties: Element | undefined): WordParagraphProperties {
-  if (!paragraphProperties) return {};
-  const alignmentElement = localElements(paragraphProperties, "jc")[0];
-  const indent = localElements(paragraphProperties, "ind")[0];
-  const spacing = localElements(paragraphProperties, "spacing")[0];
-  const line = optionalNumber(wordAttribute(spacing, "line"));
-  const lineRule = wordAttribute(spacing, "lineRule");
-  return {
-    alignment: wordAlignment(wordAttribute(alignmentElement, "val")),
-    startTwips: optionalNumber(wordAttribute(indent, "start") || wordAttribute(indent, "left")),
-    endTwips: optionalNumber(wordAttribute(indent, "end") || wordAttribute(indent, "right")),
-    firstLineTwips: optionalNumber(wordAttribute(indent, "firstLine")),
-    hangingTwips: optionalNumber(wordAttribute(indent, "hanging")),
-    beforeTwips: optionalNumber(wordAttribute(spacing, "before")),
-    afterTwips: optionalNumber(wordAttribute(spacing, "after")),
-    lineHeight: line === undefined ? undefined : lineRule === "exact" || lineRule === "atLeast" ? `${line / 15}px` : String(line / 240),
-  };
-}
-
-function definedProperties(properties: WordParagraphProperties) {
-  return Object.fromEntries(Object.entries(properties).filter(([, value]) => value !== undefined)) as WordParagraphProperties;
-}
-
-function normalizedParagraphText(value: string) {
-  return value.replace(/\s+/gu, " ").trim();
-}
-
-function applyWordParagraphFormatting(source: string, formats: WordParagraphFormat[]) {
-  if (!formats.length) return source;
-  const documentNode = new DOMParser().parseFromString(source, "text/html");
-  const selector = "p, h1, h2, h3, h4, h5, h6, li";
-  const blocks = Array.from(documentNode.body.querySelectorAll<HTMLElement>(selector)).filter((block) => !Array.from(block.children).some((child) => child.matches(selector)));
-  let formatIndex = 0;
-
-  for (const block of blocks) {
-    const blockText = normalizedParagraphText(block.textContent ?? "");
-    let matchingIndex = -1;
-    for (let candidate = formatIndex; candidate < Math.min(formats.length, formatIndex + 30); candidate += 1) {
-      if (formats[candidate].text === blockText) { matchingIndex = candidate; break; }
-    }
-    if (matchingIndex < 0) continue;
-    const format = formats[matchingIndex];
-    formatIndex = matchingIndex + 1;
-    if (format.alignment) block.style.textAlign = format.alignment;
-    if (format.startTwips !== undefined) block.style.marginLeft = `${format.startTwips / 15}px`;
-    if (format.endTwips !== undefined) block.style.marginRight = `${format.endTwips / 15}px`;
-    if (format.beforeTwips !== undefined) block.style.marginTop = `${format.beforeTwips / 15}px`;
-    if (format.afterTwips !== undefined) block.style.marginBottom = `${format.afterTwips / 15}px`;
-    if (format.firstLineTwips !== undefined) block.style.textIndent = `${format.firstLineTwips / 15}px`;
-    else if (format.hangingTwips !== undefined) block.style.textIndent = `${-format.hangingTwips / 15}px`;
-    if (format.lineHeight) block.style.lineHeight = format.lineHeight;
-  }
-  return documentNode.body.innerHTML;
-}
-
 async function normalizeLegacyHindiRuns(arrayBuffer: ArrayBuffer) {
   const zip = await JSZip.loadAsync(arrayBuffer);
   const documentFile = zip.file("word/document.xml");
-  if (!documentFile) return { arrayBuffer, convertedRuns: 0, paragraphFormats: [] as WordParagraphFormat[] };
+  if (!documentFile) return { arrayBuffer, convertedRuns: 0 };
 
-  const documentXml = parseXml(await documentFile.async("string"));
   const stylesFile = zip.file("word/styles.xml");
   const stylesXml = stylesFile ? parseXml(await stylesFile.async("string")) : null;
-  const styles = new Map<string, { basedOn: string; fontKind: WordFontKind; paragraph: WordParagraphProperties }>();
+  const styles = new Map<string, { basedOn: string; fontKind: WordFontKind }>();
 
   if (stylesXml) {
     for (const style of localElements(stylesXml, "style")) {
       const styleId = wordAttribute(style, "styleId");
       if (!styleId) continue;
       const runProperties = localElements(style, "rPr")[0];
-      const paragraphProperties = localElements(style, "pPr")[0];
       styles.set(styleId, {
         basedOn: wordAttribute(localElements(style, "basedOn")[0], "val"),
         fontKind: classifyWordFonts(runProperties ? localElements(runProperties, "rFonts")[0] : undefined),
-        paragraph: definedProperties(readWordParagraphProperties(paragraphProperties)),
       });
     }
   }
@@ -166,57 +68,66 @@ async function normalizeLegacyHindiRuns(arrayBuffer: ArrayBuffer) {
     return style.fontKind ?? styleFontKind(style.basedOn, visited);
   }
 
-  function styleParagraphProperties(styleId: string, visited = new Set<string>()): WordParagraphProperties {
-    if (!styleId || visited.has(styleId)) return {};
-    visited.add(styleId);
-    const style = styles.get(styleId);
-    if (!style) return {};
-    return { ...styleParagraphProperties(style.basedOn, visited), ...style.paragraph };
-  }
-
   const defaultRunProperties = stylesXml ? localElements(stylesXml, "rPrDefault")[0] : undefined;
   const defaultFontKind = classifyWordFonts(defaultRunProperties ? localElements(defaultRunProperties, "rFonts")[0] : undefined);
-  const defaultParagraphProperties = stylesXml ? localElements(stylesXml, "pPrDefault")[0] : undefined;
-  const defaultParagraphFormat = definedProperties(readWordParagraphProperties(defaultParagraphProperties ? localElements(defaultParagraphProperties, "pPr")[0] : undefined));
   let convertedRuns = 0;
 
-  for (const run of localElements(documentXml, "r")) {
-    const runProperties = localElements(run, "rPr")[0];
-    const directFontKind = classifyWordFonts(runProperties ? localElements(runProperties, "rFonts")[0] : undefined);
-    const runStyleId = wordAttribute(runProperties ? localElements(runProperties, "rStyle")[0] : undefined, "val");
-    let paragraph: Element | null = run.parentElement;
-    while (paragraph && paragraph.localName !== "p") paragraph = paragraph.parentElement;
-    const paragraphProperties = paragraph ? localElements(paragraph, "pPr")[0] : undefined;
-    const paragraphStyleId = wordAttribute(paragraphProperties ? localElements(paragraphProperties, "pStyle")[0] : undefined, "val");
-    const fontKind = directFontKind ?? styleFontKind(runStyleId) ?? styleFontKind(paragraphStyleId) ?? defaultFontKind;
-    if (fontKind !== "legacy") continue;
-
-    let runChanged = false;
-    for (const textNode of localElements(run, "t")) {
-      const original = textNode.textContent ?? "";
-      const converted = krutiDevToUnicode(original);
-      if (converted !== original) {
-        textNode.textContent = converted;
-        runChanged = true;
-      }
+  function applyUnicodeFont(run: Element, documentNode: Document) {
+    let runProperties = localElements(run, "rPr")[0];
+    if (!runProperties) {
+      runProperties = documentNode.createElementNS(WORDPROCESSING_NAMESPACE, "w:rPr");
+      run.insertBefore(runProperties, run.firstChild);
     }
-    if (runChanged) convertedRuns += 1;
+    let fonts = localElements(runProperties, "rFonts")[0];
+    if (!fonts) {
+      fonts = documentNode.createElementNS(WORDPROCESSING_NAMESPACE, "w:rFonts");
+      runProperties.insertBefore(fonts, runProperties.firstChild);
+    }
+    for (const attribute of ["ascii", "hAnsi", "eastAsia", "cs"]) {
+      fonts.setAttributeNS(WORDPROCESSING_NAMESPACE, `w:${attribute}`, UNICODE_HINDI_FONT);
+    }
   }
 
-  const paragraphFormats = localElements(documentXml, "p").map((paragraph) => {
-    const paragraphProperties = localElements(paragraph, "pPr")[0];
-    const styleId = wordAttribute(paragraphProperties ? localElements(paragraphProperties, "pStyle")[0] : undefined, "val");
-    const directProperties = definedProperties(readWordParagraphProperties(paragraphProperties));
-    const text = normalizedParagraphText(localElements(paragraph, "t").map((element) => element.textContent ?? "").join(""));
-    return { text, ...defaultParagraphFormat, ...styleParagraphProperties(styleId), ...directProperties };
-  });
+  const contentPartNames = Object.keys(zip.files).filter((name) => /^word\/(?:document|header\d+|footer\d+|footnotes|endnotes|comments)\.xml$/u.test(name));
 
-  if (!convertedRuns) return { arrayBuffer, convertedRuns, paragraphFormats };
-  zip.file("word/document.xml", new XMLSerializer().serializeToString(documentXml));
+  for (const partName of contentPartNames) {
+    const partFile = zip.file(partName);
+    if (!partFile) continue;
+    const partXml = parseXml(await partFile.async("string"));
+
+    for (const run of localElements(partXml, "r")) {
+      const runProperties = localElements(run, "rPr")[0];
+      const directFontKind = classifyWordFonts(runProperties ? localElements(runProperties, "rFonts")[0] : undefined);
+      const runStyleId = wordAttribute(runProperties ? localElements(runProperties, "rStyle")[0] : undefined, "val");
+      let paragraph: Element | null = run.parentElement;
+      while (paragraph && paragraph.localName !== "p") paragraph = paragraph.parentElement;
+      const paragraphProperties = paragraph ? localElements(paragraph, "pPr")[0] : undefined;
+      const paragraphStyleId = wordAttribute(paragraphProperties ? localElements(paragraphProperties, "pStyle")[0] : undefined, "val");
+      const fontKind = directFontKind ?? styleFontKind(runStyleId) ?? styleFontKind(paragraphStyleId) ?? defaultFontKind;
+      if (fontKind !== "legacy") continue;
+
+      let runChanged = false;
+      for (const textNode of localElements(run, "t")) {
+        const original = textNode.textContent ?? "";
+        const converted = krutiDevToUnicode(original);
+        if (converted !== original) {
+          textNode.textContent = converted;
+          runChanged = true;
+        }
+      }
+      if (!runChanged) continue;
+      applyUnicodeFont(run, partXml);
+      convertedRuns += 1;
+    }
+    if (partName !== "word/document.xml" || convertedRuns) {
+      zip.file(partName, new XMLSerializer().serializeToString(partXml));
+    }
+  }
+
+  if (!convertedRuns) return { arrayBuffer, convertedRuns };
   return {
     arrayBuffer: await zip.generateAsync({ type: "arraybuffer", compression: "DEFLATE" }),
     convertedRuns,
-    paragraphFormats,
   };
 }
 
@@ -230,31 +141,90 @@ async function waitForImages(element: HTMLElement) {
   }));
 }
 
-function makePdfCloneColorSafe(clonedElement: HTMLElement) {
+function makePdfCloneColorSafe(clonedDocument: Document, clonedElement: HTMLElement) {
   const elements = [clonedElement, ...Array.from(clonedElement.querySelectorAll<HTMLElement>("*"))];
+  const colorFallbacks: Record<string, string> = {
+    "background-color": "transparent",
+    "border-bottom-color": "#94a3b8",
+    "border-left-color": "#94a3b8",
+    "border-right-color": "#94a3b8",
+    "border-top-color": "#94a3b8",
+    "caret-color": "#0f172a",
+    color: "#0f172a",
+    fill: "#0f172a",
+    "outline-color": "transparent",
+    stroke: "#0f172a",
+    "text-decoration-color": "#0f172a",
+  };
+
   for (const element of elements) {
-    const isTableHeader = element.tagName === "TH"
-      || (element.tagName === "TD" && element.parentElement?.parentElement?.firstElementChild === element.parentElement);
-    const style = element.style;
-    style.setProperty("color", "#0f172a", "important");
-    style.setProperty("background-color", element === clonedElement ? "#ffffff" : isTableHeader ? "#f1f5f9" : "transparent", "important");
-    style.setProperty("background-image", "none", "important");
-    style.setProperty("border-color", "#94a3b8", "important");
-    style.setProperty("border-top-color", "#94a3b8", "important");
-    style.setProperty("border-right-color", "#94a3b8", "important");
-    style.setProperty("border-bottom-color", "#94a3b8", "important");
-    style.setProperty("border-left-color", "#94a3b8", "important");
-    style.setProperty("outline-color", "transparent", "important");
-    style.setProperty("text-decoration-color", "#0f172a", "important");
-    style.setProperty("text-emphasis-color", "#0f172a", "important");
-    style.setProperty("caret-color", "#0f172a", "important");
-    style.setProperty("column-rule-color", "#94a3b8", "important");
-    style.setProperty("box-shadow", "none", "important");
-    style.setProperty("text-shadow", "none", "important");
-    style.setProperty("filter", "none", "important");
-    style.setProperty("fill", "#0f172a", "important");
-    style.setProperty("stroke", "#0f172a", "important");
+    const computed = clonedDocument.defaultView?.getComputedStyle(element);
+    if (!computed) continue;
+    for (const [property, fallback] of Object.entries(colorFallbacks)) {
+      const value = computed.getPropertyValue(property);
+      if (/\b(?:lab|lch|oklab|oklch|color)\s*\(/iu.test(value)) {
+        element.style.setProperty(property, element === clonedElement && property === "background-color" ? "#ffffff" : fallback, "important");
+      }
+    }
   }
+}
+
+function renderedWordPages(element: HTMLElement) {
+  const pages = Array.from(element.querySelectorAll<HTMLElement>(`section.${WORD_PREVIEW_CLASS}`));
+  return pages.length ? pages : [element];
+}
+
+async function exportWordPreviewToPdf(
+  preview: HTMLElement,
+  fileName: string,
+  onProgress?: (completedPages: number, totalPages: number) => void,
+) {
+  await Promise.all([
+    document.fonts.load(`400 16px ${HINDI_FONT_STACK}`, "हिन्दी कार्यालय सहायक"),
+    document.fonts.load(`400 20px ${LEGACY_FONT_STACK}`, "dk;kZy; vads{k.k"),
+  ]);
+  await document.fonts.ready;
+  const pages = renderedWordPages(preview);
+  await Promise.all(pages.map(waitForImages));
+
+  const pageGeometry = pages.map((page) => {
+    const width = Math.ceil(Math.max(page.scrollWidth, page.clientWidth));
+    const height = Math.ceil(Math.max(page.scrollHeight, page.clientHeight));
+    if (!width || !height || width > 6000 || height > 18000) {
+      throw new Error("किसी Word page का आकार PDF बनाने के लिए असामान्य रूप से बड़ा है। Word file में page break लगाकर फिर प्रयास करें।");
+    }
+    return { page, width, height, widthPoints: width * 0.75, heightPoints: height * 0.75 };
+  });
+  if (pageGeometry.length > 600) throw new Error("इस document में 600 से अधिक PDF pages हैं। कृपया इसे दो files में बाँटें।");
+
+  let pdf: jsPDF | null = null;
+  for (let pageIndex = 0; pageIndex < pageGeometry.length; pageIndex += 1) {
+    const { page, width, height, widthPoints, heightPoints } = pageGeometry[pageIndex];
+    const orientation = widthPoints > heightPoints ? "landscape" : "portrait";
+    const pageCanvas = await html2canvas(page, {
+      backgroundColor: "#ffffff",
+      height,
+      logging: false,
+      onclone: (clonedDocument, clonedElement) => makePdfCloneColorSafe(clonedDocument, clonedElement),
+      scale: PDF_RENDER_SCALE,
+      useCORS: false,
+      width,
+      windowHeight: height,
+      windowWidth: width,
+    });
+
+    if (!pdf) {
+      pdf = new jsPDF({ orientation, unit: "pt", format: [widthPoints, heightPoints], compress: true });
+    } else {
+      pdf.addPage([widthPoints, heightPoints], orientation);
+    }
+    pdf.addImage(pageCanvas.toDataURL("image/jpeg", 0.94), "JPEG", 0, 0, widthPoints, heightPoints, undefined, "FAST");
+    pageCanvas.width = 1;
+    pageCanvas.height = 1;
+    onProgress?.(pageIndex + 1, pageGeometry.length);
+  }
+  if (!pdf) throw new Error("PDF के लिए कोई Word page नहीं मिला।");
+  pdf.save(fileName);
 }
 
 async function exportElementToPdf(
@@ -288,13 +258,7 @@ async function exportElementToPdf(
       backgroundColor: "#ffffff",
       height: chunkHeight,
       logging: false,
-      onclone: (_clonedDocument, clonedElement) => {
-        makePdfCloneColorSafe(clonedElement);
-        clonedElement.style.setProperty("font-family", HINDI_FONT_STACK, "important");
-        clonedElement.querySelectorAll<HTMLElement>("*").forEach((child) => {
-          child.style.setProperty("font-family", HINDI_FONT_STACK, "important");
-        });
-      },
+      onclone: (clonedDocument, clonedElement) => makePdfCloneColorSafe(clonedDocument, clonedElement),
       scale: PDF_RENDER_SCALE,
       useCORS: false,
       width,
@@ -344,32 +308,64 @@ function PrivacyAside({ note }: { note: string }) {
 
 export function WordToPdfWorkspace() {
   const [file, setFile] = useState<File | null>(null);
-  const [html, setHtml] = useState("");
-  const [orientation, setOrientation] = useState<PdfOrientation>("portrait");
+  const [wordMode, setWordMode] = useState<WordPdfMode>("original");
+  const [hasPreview, setHasPreview] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const previewRef = useRef<HTMLDivElement>(null);
 
+  function changeWordMode(nextMode: WordPdfMode) {
+    if (nextMode === wordMode) return;
+    setWordMode(nextMode);
+    setFile(null);
+    setHasPreview(false);
+    setMessage("");
+    setError("");
+    previewRef.current?.replaceChildren();
+  }
+
   async function selectFile(selected: File) {
     setError(""); setMessage("");
     if (!selected.name.toLowerCase().endsWith(".docx")) { setError("केवल .docx Word file चुनें।"); return; }
     if (selected.size > 15 * 1024 * 1024) { setError("Word file का आकार 15 MB से कम रखें।"); return; }
+    if (!previewRef.current) { setError("Word preview तैयार नहीं हो सकी। Page refresh करके फिर प्रयास करें।"); return; }
     setIsWorking(true);
     try {
-      const normalizedDocument = await normalizeLegacyHindiRuns(await selected.arrayBuffer());
-      const result = await mammoth.convertToHtml(
-        { arrayBuffer: normalizedDocument.arrayBuffer },
-        { convertImage: mammoth.images.dataUri, ignoreEmptyParagraphs: false },
-      );
-      const safeHtml = applyWordParagraphFormatting(sanitizeDocumentHtml(result.value), normalizedDocument.paragraphFormats);
-      if (!safeHtml.trim()) throw new Error("इस Word file में पढ़ने योग्य content नहीं मिला।");
+      const sourceBuffer = await selected.arrayBuffer();
+      const normalizedDocument = wordMode === "unicode"
+        ? await normalizeLegacyHindiRuns(sourceBuffer)
+        : { arrayBuffer: sourceBuffer, convertedRuns: 0 };
+      if (wordMode === "original") {
+        await document.fonts.load(`400 20px ${LEGACY_FONT_STACK}`, "dk;kZy; vads{k.k");
+        await document.fonts.ready;
+      }
+      previewRef.current.replaceChildren();
+      await renderDocx(normalizedDocument.arrayBuffer, previewRef.current, previewRef.current, {
+        breakPages: true,
+        className: WORD_PREVIEW_CLASS,
+        experimental: true,
+        ignoreLastRenderedPageBreak: false,
+        inWrapper: true,
+        renderComments: false,
+        renderEndnotes: true,
+        renderFooters: true,
+        renderFootnotes: true,
+        renderHeaders: true,
+        useBase64URL: true,
+      });
+      if (!previewRef.current.querySelector(`section.${WORD_PREVIEW_CLASS}`)) throw new Error("इस Word file में पढ़ने योग्य content नहीं मिला।");
       setFile(selected);
-      setHtml(safeHtml);
-      const legacyNote = normalizedDocument.convertedRuns ? `${normalizedDocument.convertedRuns} Kruti Dev/DevLys text runs Unicode Hindi में बदले गए। ` : "";
-      setMessage(result.messages.length ? `${legacyNote}Preview तैयार है। ${result.messages.length} formatting warning मिली—PDF से पहले preview जाँच लें।` : `${legacyNote}Preview तैयार है। अब PDF download कर सकते हैं।`);
+      setHasPreview(true);
+      if (wordMode === "original") {
+        setMessage("DevLys/Kruti Dev font और Word की मूल page setting वाला preview तैयार है। अब PDF download कर सकते हैं।");
+      } else {
+        const legacyNote = normalizedDocument.convertedRuns ? `${normalizedDocument.convertedRuns} Kruti Dev/DevLys text runs Unicode Hindi में बदले गए। ` : "";
+        setMessage(`${legacyNote}Unicode Hindi preview तैयार है। Font बदलने के कारण line spacing और page breaks मूल Word से अलग हो सकते हैं।`);
+      }
     } catch (caughtError) {
-      setFile(null); setHtml(""); setError(caughtError instanceof Error ? caughtError.message : "Word file नहीं खुल सकी।");
+      previewRef.current?.replaceChildren();
+      setFile(null); setHasPreview(false); setError(caughtError instanceof Error ? caughtError.message : "Word file नहीं खुल सकी।");
     } finally { setIsWorking(false); }
   }
 
@@ -377,10 +373,9 @@ export function WordToPdfWorkspace() {
     if (!file || !previewRef.current) return;
     setIsWorking(true); setError(""); setMessage("PDF तैयार हो रही है…");
     try {
-      await exportElementToPdf(
+      await exportWordPreviewToPdf(
         previewRef.current,
         `${file.name.replace(/\.docx$/iu, "")}.pdf`,
-        orientation,
         (completed, total) => setMessage(`PDF page ${completed}/${total} तैयार हो गया…`),
       );
       setMessage("PDF download हो गई।");
@@ -391,13 +386,31 @@ export function WordToPdfWorkspace() {
   return (
     <div className="grid gap-7 lg:grid-cols-[1fr_320px]">
       <section className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-xl shadow-slate-200/50 sm:p-8">
+        <fieldset className="mb-6">
+          <legend className="mb-3 text-sm font-black text-slate-900">PDF का प्रकार चुनें</legend>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className={`cursor-pointer rounded-2xl border p-4 transition ${wordMode === "original" ? "border-emerald-700 bg-emerald-50 ring-2 ring-emerald-100" : "border-slate-200 bg-white hover:border-slate-300"}`}>
+              <input type="radio" name="word-pdf-mode" value="original" checked={wordMode === "original"} disabled={isWorking} className="sr-only" onChange={() => changeWordMode("original")} />
+              <strong className="block text-sm text-slate-950">मूल Word जैसा</strong>
+              <span className="mt-1 block text-xs leading-5 text-slate-600">DevLys/Kruti Dev font, spacing और page breaks सुरक्षित।</span>
+            </label>
+            <label className={`cursor-pointer rounded-2xl border p-4 transition ${wordMode === "unicode" ? "border-emerald-700 bg-emerald-50 ring-2 ring-emerald-100" : "border-slate-200 bg-white hover:border-slate-300"}`}>
+              <input type="radio" name="word-pdf-mode" value="unicode" checked={wordMode === "unicode"} disabled={isWorking} className="sr-only" onChange={() => changeWordMode("unicode")} />
+              <strong className="block text-sm text-slate-950">Unicode Hindi</strong>
+              <span className="mt-1 block text-xs leading-5 text-slate-600">Search/copy योग्य Hindi; layout थोड़ा बदल सकता है।</span>
+            </label>
+          </div>
+        </fieldset>
         <label className="block cursor-pointer rounded-3xl border-2 border-dashed border-slate-300 bg-[#f8faf9] px-6 py-10 text-center hover:border-[#7aa596]"><span className="text-4xl" aria-hidden="true">📄</span><strong className="mt-3 block text-xl">Word file चुनें</strong><span className="mt-2 block text-sm text-slate-500">.docx • अधिकतम 15 MB</span><input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="sr-only" disabled={isWorking} onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void selectFile(selected); event.target.value = ""; }} /></label>
-        {file && <div className="mt-6 flex flex-wrap items-end justify-between gap-4 rounded-2xl border border-slate-200 p-4"><div className="min-w-0"><strong className="block truncate text-slate-900">{file.name}</strong><span className="text-xs font-semibold text-slate-500">{formatBytes(file.size)}</span></div><label className="text-sm font-extrabold text-slate-700">Page <select value={orientation} onChange={(event) => setOrientation(event.target.value as PdfOrientation)} className="ml-2 rounded-xl border border-slate-300 bg-white px-3 py-2"><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select></label></div>}
-        {html && <div className="mt-7"><div className="mb-3 flex items-center justify-between"><h2 className="text-lg font-black text-slate-950">PDF Preview</h2><button type="button" onClick={() => void makePdf()} disabled={isWorking} className="rounded-full bg-[#173f35] px-6 py-3 font-black text-white disabled:opacity-50">{isWorking ? "तैयार हो रही है…" : "PDF Download करें"}</button></div><div className="max-h-[42rem] overflow-auto rounded-2xl border border-slate-300 bg-slate-100 p-3"><div ref={previewRef} className="word-pdf-preview mx-auto min-h-[900px] w-[794px] max-w-none bg-white px-14 py-12 text-[15px] leading-7 text-slate-950 shadow-sm [&_h1]:mb-5 [&_h1]:text-3xl [&_h1]:font-black [&_h2]:mb-4 [&_h2]:mt-6 [&_h2]:text-2xl [&_h2]:font-black [&_img]:mx-auto [&_img]:max-w-full [&_li]:ml-6 [&_ol]:my-4 [&_p]:my-3 [&_table]:my-5 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-slate-400 [&_td]:p-2 [&_th]:border [&_th]:border-slate-400 [&_th]:bg-slate-100 [&_th]:p-2 [&_ul]:my-4" dangerouslySetInnerHTML={{ __html: html }} /></div></div>}
+        {file && <div className="mt-6 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 p-4"><div className="min-w-0"><strong className="block truncate text-slate-900">{file.name}</strong><span className="text-xs font-semibold text-slate-500">{formatBytes(file.size)}</span></div><span className="rounded-full bg-emerald-50 px-3 py-2 text-xs font-extrabold text-emerald-800">Page size Word file से</span></div>}
+        <div className={hasPreview ? "mt-7" : "pointer-events-none fixed -left-[10000px] top-0 w-[1000px] opacity-0"} aria-hidden={hasPreview ? undefined : true}>
+          {hasPreview && <div className="mb-3 flex items-center justify-between gap-4"><h2 className="text-lg font-black text-slate-950">PDF Preview</h2><button type="button" onClick={() => void makePdf()} disabled={isWorking} className="rounded-full bg-[#173f35] px-6 py-3 font-black text-white disabled:opacity-50">{isWorking ? "तैयार हो रही है…" : "PDF Download करें"}</button></div>}
+          <div className={hasPreview ? "max-h-[42rem] overflow-auto rounded-2xl border border-slate-300 bg-slate-200 p-3" : ""}><div ref={previewRef} className={`word-pdf-preview min-w-max ${wordMode === "original" ? "word-pdf-preview-original" : ""}`} /></div>
+        </div>
         {error && <p className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{error}</p>}
         {message && <p className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold leading-6 text-emerald-800">{message}</p>}
       </section>
-      <PrivacyAside note="Simple paragraphs, headings, lists, images और tables अच्छे से आते हैं। Complex Word layout, page headers, text boxes या exact fonts थोड़ा बदल सकते हैं।" />
+      <PrivacyAside note="मूल Word जैसा mode DevLys/Kruti Dev font और page setting सुरक्षित रखता है। Unicode Hindi mode में font metrics बदलने के कारण spacing और page breaks अलग हो सकते हैं।" />
     </div>
   );
 }

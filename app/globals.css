@@ -1,5 +1,37 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "DevLys 010";
+  src: url("/fonts/devlys-010-normal.ttf") format("truetype");
+  font-display: block;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "DevLys 010 Thin";
+  src: url("/fonts/devlys-010-normal.ttf") format("truetype");
+  font-display: block;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "Kruti Dev 010";
+  src: url("/fonts/devlys-010-normal.ttf") format("truetype");
+  font-display: block;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "Kruti Dev 160";
+  src: url("/fonts/devlys-010-normal.ttf") format("truetype");
+  font-display: block;
+  font-style: normal;
+  font-weight: 400;
+}
+
 :root {
   --background: #f8faf9;
   --foreground: #17201d;
@@ -57,7 +89,14 @@ input:focus-visible {
   color: #102b24;
 }
 
-.word-pdf-preview,
-.word-pdf-preview * {
-  font-family: "Noto Sans Devanagari", "Nirmala UI", Mangal, sans-serif !important;
+.word-pdf-preview {
+  color: #0f172a;
+}
+
+.word-pdf-preview .office-word-docx-wrapper {
+  background: #e2e8f0;
+}
+
+.word-pdf-preview-original {
+  font-synthesis: none;
 }
