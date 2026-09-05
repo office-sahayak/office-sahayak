@@ -149,7 +149,7 @@ function runCommand(command: string, args: string[], environment: NodeJS.Process
     child.once("close", (code) => {
       clearTimeout(timer);
       if (timedOut) {
-        reject(new Error("Excel conversion में बहुत समय लगा। Workbook को छोटा करके फिर प्रयास करें।"));
+        reject(new Error("Document conversion में बहुत समय लगा। File को छोटा करके फिर प्रयास करें।"));
         return;
       }
       resolve({ code, stderr, stdout });
@@ -188,16 +188,15 @@ async function createFontConfig(temporaryDirectory: string) {
   return fontConfigPath;
 }
 
-export async function convertXlsxToPdf(source: Buffer, selectedSheetIndex: number, printArea?: ExcelPrintArea) {
-  const temporaryDirectory = await mkdtemp(path.join(tmpdir(), "office-sahayak-excel-"));
-  const inputPath = path.join(temporaryDirectory, "workbook.xlsx");
+async function convertOfficeFileToPdf(source: Buffer, inputName: string, temporaryPrefix: string, emptyOutputMessage: string) {
+  const temporaryDirectory = await mkdtemp(path.join(tmpdir(), temporaryPrefix));
+  const inputPath = path.join(temporaryDirectory, inputName);
   const outputDirectory = path.join(temporaryDirectory, "output");
   const profileDirectory = path.join(temporaryDirectory, "libreoffice-profile");
 
   try {
     await Promise.all([mkdir(outputDirectory), mkdir(profileDirectory)]);
-    const selectedWorkbook = await workbookForSelectedSheet(source, selectedSheetIndex, printArea);
-    await writeFile(inputPath, selectedWorkbook);
+    await writeFile(inputPath, source);
     const fontConfigPath = await createFontConfig(temporaryDirectory);
     const argumentsList = [
       "--headless",
@@ -219,9 +218,28 @@ export async function convertXlsxToPdf(source: Buffer, selectedSheetIndex: numbe
 
     const outputFiles = await readdir(outputDirectory);
     const pdfName = outputFiles.find((name) => name.toLowerCase().endsWith(".pdf"));
-    if (!pdfName) throw new Error("LibreOffice ने PDF file नहीं बनाई। चुनी हुई sheet में printable data जाँचें।");
+    if (!pdfName) throw new Error(emptyOutputMessage);
     return await readFile(path.join(outputDirectory, pdfName));
   } finally {
     await rm(temporaryDirectory, { recursive: true, force: true });
   }
+}
+
+export async function convertXlsxToPdf(source: Buffer, selectedSheetIndex: number, printArea?: ExcelPrintArea) {
+  const selectedWorkbook = await workbookForSelectedSheet(source, selectedSheetIndex, printArea);
+  return convertOfficeFileToPdf(
+    selectedWorkbook,
+    "workbook.xlsx",
+    "office-sahayak-excel-",
+    "LibreOffice ने PDF file नहीं बनाई। चुनी हुई sheet में printable data जाँचें।",
+  );
+}
+
+export async function convertDocxToPdf(source: Buffer) {
+  return convertOfficeFileToPdf(
+    source,
+    "document.docx",
+    "office-sahayak-word-",
+    "LibreOffice ने PDF file नहीं बनाई। Word document में readable content जाँचें।",
+  );
 }

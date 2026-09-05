@@ -185,7 +185,7 @@ function renderedWordPages(element: HTMLElement) {
   return pages.length ? pages : [element];
 }
 
-async function exportWordPreviewToPdf(
+export async function exportWordPreviewToPdf(
   preview: HTMLElement,
   fileName: string,
   onProgress?: (completedPages: number, totalPages: number) => void,
@@ -448,6 +448,7 @@ function PrivacyAside({ note, privacyText = "Conversion आपके browser म
 
 export function WordToPdfWorkspace() {
   const [file, setFile] = useState<File | null>(null);
+  const [pdfSource, setPdfSource] = useState<ArrayBuffer | null>(null);
   const [wordMode, setWordMode] = useState<WordPdfMode>("original");
   const [hasPreview, setHasPreview] = useState(false);
   const [isWorking, setIsWorking] = useState(false);
@@ -459,6 +460,7 @@ export function WordToPdfWorkspace() {
     if (nextMode === wordMode) return;
     setWordMode(nextMode);
     setFile(null);
+    setPdfSource(null);
     setHasPreview(false);
     setMessage("");
     setError("");
@@ -496,29 +498,41 @@ export function WordToPdfWorkspace() {
       });
       if (!previewRef.current.querySelector(`section.${WORD_PREVIEW_CLASS}`)) throw new Error("इस Word file में पढ़ने योग्य content नहीं मिला।");
       setFile(selected);
+      setPdfSource(normalizedDocument.arrayBuffer);
       setHasPreview(true);
       if (wordMode === "original") {
-        setMessage("DevLys/Kruti Dev font और Word की मूल page setting वाला preview तैयार है। अब PDF download कर सकते हैं।");
+        setMessage("Preview तैयार है। PDF LibreOffice से Word की मूल page setting और tables के अनुसार बनेगी।");
       } else {
         const legacyNote = normalizedDocument.convertedRuns ? `${normalizedDocument.convertedRuns} Kruti Dev/DevLys text runs Unicode Hindi में बदले गए। ` : "";
         setMessage(`${legacyNote}Unicode Hindi preview तैयार है। Font बदलने के कारण line spacing और page breaks मूल Word से अलग हो सकते हैं।`);
       }
     } catch (caughtError) {
       previewRef.current?.replaceChildren();
-      setFile(null); setHasPreview(false); setError(caughtError instanceof Error ? caughtError.message : "Word file नहीं खुल सकी।");
+      setFile(null); setPdfSource(null); setHasPreview(false); setError(caughtError instanceof Error ? caughtError.message : "Word file नहीं खुल सकी।");
     } finally { setIsWorking(false); }
   }
 
   async function makePdf() {
-    if (!file || !previewRef.current) return;
-    setIsWorking(true); setError(""); setMessage("PDF तैयार हो रही है…");
+    if (!file || !pdfSource) return;
+    setIsWorking(true); setError(""); setMessage("LibreOffice से PDF तैयार हो रही है…");
     try {
-      await exportWordPreviewToPdf(
-        previewRef.current,
-        `${file.name.replace(/\.docx$/iu, "")}.pdf`,
-        (completed, total) => setMessage(`PDF page ${completed}/${total} तैयार हो गया…`),
-      );
-      setMessage("PDF download हो गई।");
+      const formData = new FormData();
+      formData.append("file", new Blob([pdfSource], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }), file.name);
+      const response = await fetch("/api/word-to-pdf", { method: "POST", body: formData });
+      if (!response.ok) {
+        const result = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(result?.error || "Word की PDF नहीं बन सकी।");
+      }
+      const pdf = await response.blob();
+      const downloadUrl = URL.createObjectURL(pdf);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = `${file.name.replace(/\.docx$/iu, "")}.pdf`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 1_000);
+      setMessage("LibreOffice से बनी Word PDF download हो गई।");
     } catch (caughtError) { setError(caughtError instanceof Error ? caughtError.message : "PDF नहीं बन सकी।"); setMessage(""); }
     finally { setIsWorking(false); }
   }
@@ -542,7 +556,7 @@ export function WordToPdfWorkspace() {
           </div>
         </fieldset>
         <label className="block cursor-pointer rounded-3xl border-2 border-dashed border-slate-300 bg-[#f8faf9] px-6 py-10 text-center hover:border-[#7aa596]"><span className="text-4xl" aria-hidden="true">📄</span><strong className="mt-3 block text-xl">Word file चुनें</strong><span className="mt-2 block text-sm text-slate-500">.docx • अधिकतम 15 MB</span><input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" className="sr-only" disabled={isWorking} onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void selectFile(selected); event.target.value = ""; }} /></label>
-        {file && <div className="mt-6 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 p-4"><div className="min-w-0"><strong className="block truncate text-slate-900">{file.name}</strong><span className="text-xs font-semibold text-slate-500">{formatBytes(file.size)}</span></div><span className="rounded-full bg-emerald-50 px-3 py-2 text-xs font-extrabold text-emerald-800">Page size Word file से</span></div>}
+        {file && <div className="mt-6 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 p-4"><div className="min-w-0"><strong className="block truncate text-slate-900">{file.name}</strong><span className="text-xs font-semibold text-slate-500">{formatBytes(file.size)}</span></div><span className="rounded-full bg-emerald-50 px-3 py-2 text-xs font-extrabold text-emerald-800">LibreOffice ready</span></div>}
         <div className={hasPreview ? "mt-7" : "pointer-events-none fixed -left-[10000px] top-0 w-[1000px] opacity-0"} aria-hidden={hasPreview ? undefined : true}>
           {hasPreview && <div className="mb-3 flex items-center justify-between gap-4"><h2 className="text-lg font-black text-slate-950">PDF Preview</h2><button type="button" onClick={() => void makePdf()} disabled={isWorking} className="rounded-full bg-[#173f35] px-6 py-3 font-black text-white disabled:opacity-50">{isWorking ? "तैयार हो रही है…" : "PDF Download करें"}</button></div>}
           <div className={hasPreview ? "max-h-[42rem] overflow-auto rounded-2xl border border-slate-300 bg-slate-200 p-3" : ""}><div ref={previewRef} className={`word-pdf-preview min-w-max ${wordMode === "original" ? "word-pdf-preview-original" : ""}`} /></div>
@@ -550,7 +564,7 @@ export function WordToPdfWorkspace() {
         {error && <p className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{error}</p>}
         {message && <p className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold leading-6 text-emerald-800">{message}</p>}
       </section>
-      <PrivacyAside note="मूल Word जैसा mode DevLys/Kruti Dev font और page setting सुरक्षित रखता है। Unicode Hindi mode में font metrics बदलने के कारण spacing और page breaks अलग हो सकते हैं।" />
+      <PrivacyAside privacyText="Word file conversion के लिए इसी server पर अस्थायी रूप से process होती है और PDF बनते ही upload व temporary files हटा दी जाती हैं।" note="मूल Word जैसा mode tables, margins, page breaks और DevLys/Kruti Dev font सुरक्षित रखता है। Unicode Hindi mode में font metrics बदलने के कारण spacing अलग हो सकती है।" />
     </div>
   );
 }
