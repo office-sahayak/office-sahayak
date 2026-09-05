@@ -19,6 +19,10 @@ type PdfOrientation = "portrait" | "landscape";
 type WordPdfMode = "original" | "unicode";
 
 const PDF_RENDER_SCALE = 1.35;
+const EXCEL_PDF_RENDER_SCALE = 2;
+// DevLys/Kruti report legacy GDI font metrics that place their browser ink
+// about half an em below Excel's cell baseline.
+const EXCEL_LEGACY_BASELINE_SHIFT = "-0.42em";
 const HINDI_FONT_STACK = '"Noto Sans Devanagari", "Nirmala UI", Mangal, sans-serif';
 const LEGACY_FONT_STACK = '"DevLys 010", "Kruti Dev 010", serif';
 const UNICODE_HINDI_FONT = "Noto Sans Devanagari";
@@ -302,7 +306,7 @@ function addExcelHeaderFooter(
   }
 }
 
-async function exportExcelPreviewToPdf(
+export async function exportExcelPreviewToPdf(
   preview: HTMLElement,
   sheet: ParsedSheet,
   fileName: string,
@@ -334,18 +338,26 @@ async function exportExcelPreviewToPdf(
   const sourcePageHeight = printableHeightPixels / Math.max(0.01, contentScale);
   const tolerancePixels = 10 / 0.75 / Math.max(0.01, contentScale);
   const manualBreaks = new Set(sheet.manualRowBreaks);
+  const repeatRowIndexes = new Set(rowElements.flatMap((row, index) => {
+    const rowNumber = Number(row.dataset.rowNumber ?? 0) - 1;
+    return sheet.repeatRows && rowNumber >= sheet.repeatRows.startRow && rowNumber <= sheet.repeatRows.endRow ? [index] : [];
+  }));
+  const repeatRowsHeight = Array.from(repeatRowIndexes)
+    .reduce((total, index) => total + rowElements[index].getBoundingClientRect().height, 0);
   const groups: Array<{ start: number; end: number }> = [];
   let start = 0;
   let accumulatedHeight = 0;
+  let currentPageHeight = sourcePageHeight;
 
   for (let index = 0; index < rowElements.length; index += 1) {
     const rowNumber = Number(rowElements[index].dataset.rowNumber ?? 0);
     const rowHeight = rowElements[index].getBoundingClientRect().height;
     const manualBreak = index > start && manualBreaks.has(rowNumber - 1);
-    if (index > start && (manualBreak || accumulatedHeight + rowHeight > sourcePageHeight + tolerancePixels)) {
+    if (index > start && (manualBreak || accumulatedHeight + rowHeight > currentPageHeight + tolerancePixels)) {
       groups.push({ start, end: index - 1 });
       start = index;
       accumulatedHeight = 0;
+      currentPageHeight = Math.max(rowHeight, sourcePageHeight - repeatRowsHeight);
     }
     accumulatedHeight += rowHeight;
   }
@@ -375,8 +387,26 @@ async function exportExcelPreviewToPdf(
     clonedTable.style.margin = "0";
     clonedTable.style.width = `${tableWidthPixels}px`;
     Array.from(clonedTable.tBodies[0].rows).forEach((row, index) => {
-      if (index < group.start || index > group.end) row.remove();
+      const inPageGroup = index >= group.start && index <= group.end;
+      const repeatedTitle = pageIndex > 0 && repeatRowIndexes.has(index);
+      if (!inPageGroup && !repeatedTitle) row.remove();
     });
+    const pageRows = Array.from(clonedTable.tBodies[0].rows);
+    const lastPageRow = pageRows.at(-1);
+    if (lastPageRow) {
+      for (const cell of Array.from(lastPageRow.cells)) {
+        const bottomBorder = cell.dataset.excelPageBottomBorder;
+        if (bottomBorder) {
+          cell.dataset.excelBorderBottom = bottomBorder;
+          applyExcelCellBorderBackground(cell, {
+            bottom: bottomBorder,
+            left: cell.dataset.excelBorderLeft,
+            right: cell.dataset.excelBorderRight,
+            top: cell.dataset.excelBorderTop,
+          });
+        }
+      }
+    }
     content.append(clonedTable);
     page.append(content);
     addExcelHeaderFooter(page, sheet.page.oddHeader, "header", sheet.page.headerMarginInches * 96, pageIndex + 1, groups.length, sheet.name, fileName);
@@ -389,7 +419,7 @@ async function exportExcelPreviewToPdf(
         height: Math.ceil(pageHeightPixels),
         logging: false,
         onclone: (clonedDocument, clonedElement) => makePdfCloneColorSafe(clonedDocument, clonedElement),
-        scale: PDF_RENDER_SCALE,
+        scale: EXCEL_PDF_RENDER_SCALE,
         useCORS: false,
         width: Math.ceil(pageWidthPixels),
         windowHeight: Math.ceil(pageHeightPixels),
@@ -407,10 +437,10 @@ async function exportExcelPreviewToPdf(
   pdf.save(fileName);
 }
 
-function PrivacyAside({ note }: { note: string }) {
+function PrivacyAside({ note, privacyText = "Conversion आपके browser में होती है। Document किसी server पर upload नहीं किया जाता।" }: { note: string; privacyText?: string }) {
   return (
     <aside className="space-y-4">
-      <div className="rounded-3xl bg-[#173f35] p-6 text-white"><span className="text-3xl" aria-hidden="true">🔒</span><h2 className="mt-4 text-xl font-black">File निजी रहती है</h2><p className="mt-2 text-sm leading-6 text-white/70">Conversion आपके browser में होती है। Document किसी server पर upload नहीं किया जाता।</p></div>
+      <div className="rounded-3xl bg-[#173f35] p-6 text-white"><span className="text-3xl" aria-hidden="true">🔒</span><h2 className="mt-4 text-xl font-black">File निजी रहती है</h2><p className="mt-2 text-sm leading-6 text-white/70">{privacyText}</p></div>
       <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5 text-sm leading-6 text-amber-900"><strong className="block">ध्यान दें</strong>{note}</div>
     </aside>
   );
@@ -547,29 +577,89 @@ function excelBorderCss(border: ExcelBorderSide | undefined) {
   return `${width} ${style} ${border.color}`;
 }
 
+type ExcelBorderEdge = "bottom" | "left" | "right" | "top";
+
+function excelCellBorderCss(style: ExcelCellStyle, edge: ExcelBorderEdge) {
+  const border = edge === "bottom" ? style.borderBottom
+    : edge === "left" ? style.borderLeft
+      : edge === "right" ? style.borderRight
+        : style.borderTop;
+  return excelBorderCss(border);
+}
+
+function excelBorderLayerThickness(border?: string) {
+  const width = border?.match(/^([\d.]+)px\s/iu)?.[1];
+  return Math.max(1, Number(width) || 1);
+}
+
+function excelBorderLayerBackground(border: string | undefined, direction: "horizontal" | "vertical") {
+  const match = border?.match(/^[\d.]+px\s+(solid|dashed|double)\s+(.+)$/iu);
+  if (!match) return undefined;
+  const [, style, color] = match;
+  const axis = direction === "horizontal" ? "to right" : "to bottom";
+  if (style.toLowerCase() === "dashed") {
+    const dash = Math.max(3, excelBorderLayerThickness(border) * 3);
+    return `repeating-linear-gradient(${axis}, ${color} 0, ${color} ${dash}px, transparent ${dash}px, transparent ${dash * 2}px)`;
+  }
+  if (style.toLowerCase() === "double") {
+    const crossAxis = direction === "horizontal" ? "to bottom" : "to right";
+    return `linear-gradient(${crossAxis}, ${color} 0 33%, transparent 33% 67%, ${color} 67% 100%)`;
+  }
+  return `linear-gradient(${color}, ${color})`;
+}
+
+type ExcelCellBorderBackground = {
+  bottom?: string;
+  left?: string;
+  right?: string;
+  top?: string;
+};
+
+function excelCellBorderBackgroundCss({ bottom, left, right, top }: ExcelCellBorderBackground): CSSProperties {
+  const layers = [
+    top ? { image: excelBorderLayerBackground(top, "horizontal"), position: "left top", size: `100% ${excelBorderLayerThickness(top)}px` } : undefined,
+    right ? { image: excelBorderLayerBackground(right, "vertical"), position: "right top", size: `${excelBorderLayerThickness(right)}px 100%` } : undefined,
+    bottom ? { image: excelBorderLayerBackground(bottom, "horizontal"), position: "left bottom", size: `100% ${excelBorderLayerThickness(bottom)}px` } : undefined,
+    left ? { image: excelBorderLayerBackground(left, "vertical"), position: "left top", size: `${excelBorderLayerThickness(left)}px 100%` } : undefined,
+  ].filter((layer): layer is { image: string; position: string; size: string } => Boolean(layer?.image));
+  if (!layers.length) return {};
+  return {
+    backgroundImage: layers.map((layer) => layer.image).join(", "),
+    backgroundPosition: layers.map((layer) => layer.position).join(", "),
+    backgroundRepeat: layers.map(() => "no-repeat").join(", "),
+    backgroundSize: layers.map((layer) => layer.size).join(", "),
+  };
+}
+
+function applyExcelCellBorderBackground(element: HTMLElement, borders: ExcelCellBorderBackground) {
+  const background = excelCellBorderBackgroundCss(borders);
+  element.style.backgroundImage = background.backgroundImage?.toString() ?? "";
+  element.style.backgroundPosition = background.backgroundPosition?.toString() ?? "";
+  element.style.backgroundRepeat = background.backgroundRepeat?.toString() ?? "";
+  element.style.backgroundSize = background.backgroundSize?.toString() ?? "";
+}
+
 function excelCellCss(style: ExcelCellStyle, value: string): CSSProperties {
   const isLegacy = /devlys|kruti\s*dev/iu.test(style.fontFamily);
-  const fallbackBorder = style.hasBorder ? "1px solid #000000" : undefined;
+  const lineHeight = 1.05;
+  const autoCenterBottom = style.hasBorder && style.vertical === "bottom";
   return {
     backgroundColor: style.backgroundColor,
-    borderBottom: excelBorderCss(style.borderBottom) ?? fallbackBorder,
-    borderLeft: excelBorderCss(style.borderLeft) ?? fallbackBorder,
-    borderRight: excelBorderCss(style.borderRight) ?? fallbackBorder,
-    borderTop: excelBorderCss(style.borderTop) ?? fallbackBorder,
     boxSizing: "border-box",
     color: style.color,
     fontFamily: isLegacy ? `"${style.fontFamily}", ${LEGACY_FONT_STACK}` : `"${style.fontFamily}", Arial, sans-serif`,
     fontSize: `${style.fontSizePoints}pt`,
     fontStyle: style.italic ? "italic" : "normal",
     fontWeight: style.bold ? 700 : 400,
-    lineHeight: isLegacy ? 1.2 : 1.05,
+    lineHeight,
     overflow: style.wrapText ? "hidden" : "visible",
     overflowWrap: style.wrapText ? (isLegacy ? "normal" : "break-word") : undefined,
-    padding: "0 2px",
+    padding: autoCenterBottom ? "1px 2px" : "0 2px",
+    position: "relative",
     textAlign: style.horizontal ?? (/^-?\d+(?:\.\d+)?%?$/u.test(value.trim()) ? "right" : "left"),
     textDecoration: style.underline ? "underline" : undefined,
     textOverflow: style.shrinkToFit ? "clip" : undefined,
-    verticalAlign: style.vertical,
+    verticalAlign: autoCenterBottom ? "middle" : style.vertical,
     whiteSpace: style.wrapText ? "pre-wrap" : "pre",
     wordBreak: style.wrapText ? "normal" : undefined,
   };
@@ -591,9 +681,22 @@ function excelMergeMaps(sheet: ParsedSheet) {
 
 function ExcelSheetPreview({ sheet, styles }: { sheet: ParsedSheet; styles: ExcelCellStyle[] }) {
   const { anchors, covered } = excelMergeMaps(sheet);
+  const rowsByIndex = new Map(sheet.rows.map((row) => [row.index, row]));
+  const borderAt = (rowIndex: number, column: number, edge: ExcelBorderEdge) => {
+    const cell = rowsByIndex.get(rowIndex)?.cells[column];
+    const style = cell ? (styles[cell.styleIndex] ?? styles[0]) : styles[0];
+    return excelCellBorderCss(style, edge);
+  };
+  const borderAcross = (rowIndex: number, startColumn: number, endColumn: number, edge: ExcelBorderEdge) => {
+    for (let column = startColumn; column <= endColumn; column += 1) {
+      const border = borderAt(rowIndex, column, edge);
+      if (border) return border;
+    }
+    return undefined;
+  };
   const width = sheet.columnWidthsPixels.reduce((total, columnWidth) => total + columnWidth, 0);
   return (
-    <table data-excel-table className="bg-white" style={{ borderCollapse: "collapse", tableLayout: "fixed", width: `${width}px` }}>
+    <table data-excel-table className="bg-white" style={{ borderCollapse: "separate", borderSpacing: 0, tableLayout: "fixed", width: `${width}px` }}>
       <colgroup>
         {sheet.columnWidthsPixels.map((columnWidth, index) => <col key={index} style={{ width: `${columnWidth}px` }} />)}
       </colgroup>
@@ -609,15 +712,37 @@ function ExcelSheetPreview({ sheet, styles }: { sheet: ParsedSheet; styles: Exce
                 const cell = row.cells[column] ?? { styleIndex: 0, value: "" };
                 const style = styles[cell.styleIndex] ?? styles[0];
                 const merge = anchors.get(key);
+                const endColumn = merge?.endColumn ?? column;
+                const endRow = merge?.endRow ?? row.index;
+                const pageBottomBorder = borderAcross(endRow, column, endColumn, "bottom")
+                  ?? borderAcross(endRow + 1, column, endColumn, "top");
+                const borderBottom = endRow === sheet.maxRow ? pageBottomBorder : undefined;
+                const borderLeft = borderAt(row.index, column, "left") ?? borderAt(row.index, column - 1, "right");
+                const borderRight = endColumn === sheet.maxColumn ? borderAt(row.index, endColumn, "right") : undefined;
+                const borderTop = borderAcross(row.index, column, endColumn, "top")
+                  ?? borderAcross(row.index - 1, column, endColumn, "bottom");
                 return (
                   <td
                     key={column}
                     colSpan={merge ? merge.endColumn - merge.startColumn + 1 : undefined}
+                    data-excel-border-bottom={borderBottom}
+                    data-excel-border-left={borderLeft}
+                    data-excel-border-right={borderRight}
+                    data-excel-border-top={borderTop}
+                    data-excel-page-bottom-border={pageBottomBorder}
                     rowSpan={merge ? merge.endRow - merge.startRow + 1 : undefined}
-                    style={{ ...excelCellCss(style, cell.value), height: fixedHeight ? `${fixedHeight}pt` : undefined }}
+                    style={{
+                      ...excelCellCss(style, cell.value),
+                      ...excelCellBorderBackgroundCss({ bottom: borderBottom, left: borderLeft, right: borderRight, top: borderTop }),
+                      height: fixedHeight ? `${fixedHeight}pt` : undefined,
+                    }}
                   >
                     <span style={{
+                      display: "inline-block",
                       position: "relative",
+                      transform: /devlys|kruti\s*dev/iu.test(style.fontFamily) && style.hasBorder
+                        ? `translateY(${EXCEL_LEGACY_BASELINE_SHIFT})`
+                        : undefined,
                       zIndex: cell.value ? 1 : undefined,
                     }}>{cell.value}</span>
                   </td>
@@ -635,11 +760,9 @@ export function ExcelToPdfWorkspace() {
   const [file, setFile] = useState<File | null>(null);
   const [workbook, setWorkbook] = useState<ParsedWorkbook | null>(null);
   const [sheetIndex, setSheetIndex] = useState(0);
-  const [orientation, setOrientation] = useState<PdfOrientation>("landscape");
   const [isWorking, setIsWorking] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const previewRef = useRef<HTMLDivElement>(null);
 
   async function selectFile(selected: File) {
     setError(""); setMessage("");
@@ -650,35 +773,50 @@ export function ExcelToPdfWorkspace() {
       const parsed = await parseXlsx(selected);
       const firstDataSheet = Math.max(0, parsed.sheets.findIndex((sheet) => sheet.hasData));
       setFile(selected); setWorkbook(parsed); setSheetIndex(firstDataSheet);
-      setOrientation(parsed.sheets[firstDataSheet]?.page.orientation ?? "landscape");
       const ignored = parsed.sheets.reduce((total, sheet) => total + sheet.ignoredOutlierCells, 0);
       setMessage(ignored
-        ? "Excel का मूल layout तैयार है। मुख्य table से बहुत दूर पड़े बिखरे हुए cells PDF में शामिल नहीं किए जाएँगे।"
-        : "Excel का मूल layout और print setting तैयार है। Sheet चुनकर PDF download करें।");
+        ? "Preview तैयार है। PDF में LibreOffice, Excel की वास्तविक print range और settings का उपयोग करेगा।"
+        : "Preview तैयार है। Sheet चुनें; PDF Excel की वास्तविक print settings से बनेगी।");
     } catch (caughtError) { setFile(null); setWorkbook(null); setError(caughtError instanceof Error ? caughtError.message : "Excel file नहीं खुल सकी।"); }
     finally { setIsWorking(false); }
   }
 
   function changeSheet(nextIndex: number) {
     setSheetIndex(nextIndex);
-    const nextSheet = workbook?.sheets[nextIndex];
-    if (nextSheet) setOrientation(nextSheet.page.orientation);
+    setMessage("Sheet चुन ली गई है। PDF Excel की वास्तविक print settings से बनेगी।");
   }
 
   async function makePdf() {
     const activeSheet = workbook?.sheets[sheetIndex];
-    if (!file || !activeSheet || !previewRef.current) return;
-    setIsWorking(true); setError(""); setMessage("PDF pages तैयार हो रहे हैं…");
+    if (!file || !activeSheet) return;
+    setIsWorking(true); setError(""); setMessage("LibreOffice से PDF तैयार हो रही है…");
     try {
       const sheetName = activeSheet.name.replace(/[^a-z0-9\u0900-\u097f_-]+/giu, "-") || "sheet";
-      await exportExcelPreviewToPdf(
-        previewRef.current,
-        activeSheet,
-        `${file.name.replace(/\.xlsx$/iu, "")}-${sheetName}.pdf`,
-        orientation,
-        (completed, total) => setMessage(`PDF page ${completed}/${total} तैयार हो गया…`),
-      );
-      setMessage("Excel sheet की PDF download हो गई।");
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("sheetIndex", String(sheetIndex));
+      formData.append("sheetName", activeSheet.name);
+      if (activeSheet.ignoredOutlierCells > 0) {
+        formData.append("minColumn", String(activeSheet.minColumn));
+        formData.append("maxColumn", String(activeSheet.maxColumn));
+        formData.append("minRow", String(activeSheet.minRow));
+        formData.append("maxRow", String(activeSheet.maxRow));
+      }
+      const response = await fetch("/api/excel-to-pdf", { method: "POST", body: formData });
+      if (!response.ok) {
+        const result = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(result?.error || "Excel की PDF नहीं बन सकी।");
+      }
+      const pdf = await response.blob();
+      const downloadUrl = URL.createObjectURL(pdf);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = `${file.name.replace(/\.xlsx$/iu, "")}-${sheetName}.pdf`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 1_000);
+      setMessage("LibreOffice से बनी Excel sheet की PDF download हो गई।");
     } catch (caughtError) { setError(caughtError instanceof Error ? caughtError.message : "PDF नहीं बन सकी।"); setMessage(""); }
     finally { setIsWorking(false); }
   }
@@ -689,13 +827,13 @@ export function ExcelToPdfWorkspace() {
     <div className="grid gap-7 lg:grid-cols-[1fr_320px]">
       <section className="rounded-[2rem] border border-slate-200 bg-white p-5 shadow-xl shadow-slate-200/50 sm:p-8">
         <label className="block cursor-pointer rounded-3xl border-2 border-dashed border-slate-300 bg-[#f8faf9] px-6 py-10 text-center hover:border-[#7aa596]"><span className="text-4xl" aria-hidden="true">📊</span><strong className="mt-3 block text-xl">Excel file चुनें</strong><span className="mt-2 block text-sm text-slate-500">.xlsx • अधिकतम 20 MB</span><input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="sr-only" disabled={isWorking} onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void selectFile(selected); event.target.value = ""; }} /></label>
-        {file && <div className="mt-5 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 p-4"><div className="min-w-0"><strong className="block truncate text-slate-900">{file.name}</strong><span className="text-xs font-semibold text-slate-500">{formatBytes(file.size)}</span></div><span className="rounded-full bg-emerald-50 px-3 py-2 text-xs font-extrabold text-emerald-800">Excel layout सुरक्षित</span></div>}
-        {workbook && <div className="mt-5 grid gap-4 rounded-2xl border border-slate-200 p-4 sm:grid-cols-2"><label className="text-sm font-extrabold text-slate-700">Sheet<select value={sheetIndex} onChange={(event) => changeSheet(Number(event.target.value))} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3">{workbook.sheets.map((sheet, index) => <option key={`${sheet.name}-${index}`} value={index}>{sheet.name}{sheet.hasData ? "" : " (खाली)"}</option>)}</select></label><label className="text-sm font-extrabold text-slate-700">Page<select value={orientation} onChange={(event) => setOrientation(event.target.value as PdfOrientation)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3"><option value="landscape">Landscape</option><option value="portrait">Portrait</option></select></label></div>}
-        {activeSheet && <div className="mt-7"><div className="mb-3 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-black text-slate-950">{activeSheet.name}</h2><p className="text-xs text-slate-500">{activeSheet.rows.length} rows • {activeSheet.columnWidthsPixels.length} columns • page setting Excel file से</p></div><button type="button" onClick={() => void makePdf()} disabled={isWorking || !activeSheet.hasData} className="rounded-full bg-[#173f35] px-6 py-3 font-black text-white disabled:opacity-50">{isWorking ? "तैयार हो रही है…" : "PDF Download करें"}</button></div><div className="max-h-[42rem] overflow-auto rounded-2xl border border-slate-300 bg-slate-200 p-3"><div ref={previewRef} className="inline-block min-h-80 min-w-full bg-white text-slate-950">{activeSheet.hasData ? <ExcelSheetPreview sheet={activeSheet} styles={workbook?.styles ?? []} /> : <p className="p-8 text-slate-500">इस sheet में data नहीं है।</p>}</div></div></div>}
+        {file && <div className="mt-5 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 p-4"><div className="min-w-0"><strong className="block truncate text-slate-900">{file.name}</strong><span className="text-xs font-semibold text-slate-500">{formatBytes(file.size)}</span></div><span className="rounded-full bg-emerald-50 px-3 py-2 text-xs font-extrabold text-emerald-800">LibreOffice ready</span></div>}
+        {workbook && <div className="mt-5 rounded-2xl border border-slate-200 p-4"><label className="text-sm font-extrabold text-slate-700">Sheet<select value={sheetIndex} onChange={(event) => changeSheet(Number(event.target.value))} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3">{workbook.sheets.map((sheet, index) => <option key={`${sheet.name}-${index}`} value={index}>{sheet.name}{sheet.hasData ? "" : " (खाली)"}</option>)}</select></label><p className="mt-3 text-xs leading-5 text-slate-500">Page size, orientation, margins, print titles और page breaks Excel file से लिए जाएँगे।</p></div>}
+        {activeSheet && <div className="mt-7"><div className="mb-3 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-black text-slate-950">{activeSheet.name}</h2><p className="text-xs text-slate-500">{activeSheet.rows.length} rows • {activeSheet.columnWidthsPixels.length} columns • PDF LibreOffice engine से</p></div><button type="button" onClick={() => void makePdf()} disabled={isWorking || !activeSheet.hasData} className="rounded-full bg-[#173f35] px-6 py-3 font-black text-white disabled:opacity-50">{isWorking ? "तैयार हो रही है…" : "PDF Download करें"}</button></div><div className="max-h-[42rem] overflow-auto rounded-2xl border border-slate-300 bg-slate-200 p-3"><div className="inline-block min-h-80 min-w-full bg-white text-slate-950">{activeSheet.hasData ? <ExcelSheetPreview sheet={activeSheet} styles={workbook?.styles ?? []} /> : <p className="p-8 text-slate-500">इस sheet में data नहीं है।</p>}</div></div></div>}
         {error && <p className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{error}</p>}
         {message && <p className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold leading-6 text-emerald-800">{message}</p>}
       </section>
-      <PrivacyAside note="Excel की column widths, row heights, fonts, borders, merged cells, margins, page orientation और header/footer browser में पढ़े जाते हैं। बहुत दूर पड़े बिखरे cells मुख्य table से अलग माने जाते हैं।" />
+      <PrivacyAside privacyText="Excel file conversion के लिए इसी server पर अस्थायी रूप से process होती है और PDF बनते ही upload व temporary files हटा दी जाती हैं।" note="सही output के लिए server पर LibreOffice और workbook में इस्तेमाल हुए fonts उपलब्ध होने चाहिए। PDF में Excel की saved print settings लागू होंगी।" />
     </div>
   );
 }

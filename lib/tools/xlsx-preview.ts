@@ -72,6 +72,10 @@ export interface ParsedSheet {
   minRow: number;
   name: string;
   page: ExcelPageSettings;
+  repeatRows?: {
+    endRow: number;
+    startRow: number;
+  };
   rows: ExcelRow[];
 }
 
@@ -105,7 +109,9 @@ function parseXml(source: string) {
 }
 
 function numericAttribute(element: Element | undefined, name: string, fallback: number) {
-  const parsed = Number(element?.getAttribute(name));
+  const value = element?.getAttribute(name);
+  if (value === null || value === undefined || value === "") return fallback;
+  const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
@@ -299,6 +305,21 @@ function dominantRange(cells: Array<{ column: number; row: number; value: string
     const leftScore = left.reduce((total, column) => total + (counts.get(column) ?? 0), 0);
     return rightScore - leftScore || left[0] - right[0];
   })[0];
+  // A single accidental value just beyond an otherwise dense table should
+  // not widen every printed page. Excel's used range often retains these
+  // cells even after the user has cleared the surrounding columns.
+  while (cluster.length > 1) {
+    const last = cluster.at(-1)!;
+    const previous = cluster.at(-2)!;
+    if ((counts.get(last) ?? 0) !== 1 || last - previous <= 1) break;
+    cluster.pop();
+  }
+  while (cluster.length > 1) {
+    const first = cluster[0];
+    const next = cluster[1];
+    if ((counts.get(first) ?? 0) !== 1 || next - first <= 1) break;
+    cluster.shift();
+  }
   const minColumn = cluster[0];
   const maxColumn = cluster.at(-1)!;
   const selected = nonEmpty.filter((cell) => cell.column >= minColumn && cell.column <= maxColumn);
@@ -320,6 +341,16 @@ function sheetPrintArea(definedNames: Element[], sheetIndex: number) {
     && Number(element.getAttribute("localSheetId")) === sheetIndex);
   const firstArea = definition?.textContent?.split(",")[0];
   return firstArea ? rangeReference(firstArea) : undefined;
+}
+
+function sheetPrintTitleRows(definedNames: Element[], sheetIndex: number) {
+  const definition = definedNames.find((element) => element.getAttribute("name") === "_xlnm.Print_Titles"
+    && Number(element.getAttribute("localSheetId")) === sheetIndex);
+  const match = definition?.textContent?.match(/!\$?(\d+):\$?(\d+)/u);
+  if (!match) return undefined;
+  const startRow = Math.max(0, Number(match[1]) - 1);
+  const endRow = Math.max(0, Number(match[2]) - 1);
+  return { startRow: Math.min(startRow, endRow), endRow: Math.max(startRow, endRow) };
 }
 
 export async function parseXlsx(file: File): Promise<ParsedWorkbook> {
@@ -424,6 +455,15 @@ export async function parseXlsx(file: File): Promise<ParsedWorkbook> {
       ? localElements(rowBreaks, "brk").filter((element) => booleanAttribute(element, "man")).map((element) => numericAttribute(element, "id", 0))
       : [];
     const ignoredOutlierCells = "ignored" in detectedRange && typeof detectedRange.ignored === "number" ? detectedRange.ignored : 0;
+    const printTitleRows = sheetPrintTitleRows(definedNames, sheetIndex);
+    const repeatRows = printTitleRows
+      && printTitleRows.endRow >= detectedRange.minRow
+      && printTitleRows.startRow <= detectedRange.maxRow
+      ? {
+          startRow: Math.max(printTitleRows.startRow, detectedRange.minRow),
+          endRow: Math.min(printTitleRows.endRow, detectedRange.maxRow),
+        }
+      : undefined;
 
     sheets.push({
       columnWidthsPixels,
@@ -448,6 +488,7 @@ export async function parseXlsx(file: File): Promise<ParsedWorkbook> {
         orientation: pageSetup?.getAttribute("orientation") === "landscape" ? "landscape" : "portrait",
         paperSize: numericAttribute(pageSetup, "paperSize", 9),
       },
+      repeatRows,
       rows,
     });
   }
