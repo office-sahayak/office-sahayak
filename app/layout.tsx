@@ -21,6 +21,9 @@ export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://office-sahayak.onrender.com"),
   title: "Office Sahayak — काम आसान, हर दिन",
   description: "PDF, दस्तावेज़, गणना और सरकारी कामों के लिए सरल हिन्दी ऑनलाइन टूल्स।",
+  other: {
+    "google-adsense-account": "ca-pub-5723913841152869",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
