@@ -2,7 +2,7 @@ import Link from "next/link";
 
 export function SiteFooter() {
   return (
-    <footer id="about" className="bg-[#102b24] text-white">
+    <footer className="bg-[#102b24] text-white">
       <div className="mx-auto grid w-full max-w-7xl gap-10 px-5 py-14 sm:px-8 md:grid-cols-[1.2fr_0.8fr] lg:px-10">
         <div className="max-w-xl">
           <div className="flex items-center gap-3">
@@ -24,8 +24,11 @@ export function SiteFooter() {
           <div>
             <h2 className="font-extrabold text-white">जानकारी</h2>
             <div className="mt-4 space-y-3 text-white/60">
-              <span className="block">हिन्दी सहायता</span>
-              <span className="block">मुफ़्त उपयोग</span>
+              <Link className="block hover:text-white" href="/about">हमारे बारे में</Link>
+              <Link className="block hover:text-white" href="/contact">संपर्क</Link>
+              <Link className="block hover:text-white" href="/privacy">गोपनीयता नीति</Link>
+              <Link className="block hover:text-white" href="/terms">उपयोग की शर्तें</Link>
+              <Link className="block hover:text-white" href="/disclaimer">अस्वीकरण</Link>
             </div>
           </div>
         </div>

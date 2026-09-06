@@ -15,7 +15,7 @@ export function SiteHeader() {
         <nav className="hidden items-center gap-8 text-sm font-semibold text-slate-600 md:flex" aria-label="मुख्य नेविगेशन">
           <Link className="transition hover:text-[#173f35]" href="/#categories">श्रेणियाँ</Link>
           <Link className="transition hover:text-[#173f35]" href="/#tools">सभी टूल्स</Link>
-          <Link className="transition hover:text-[#173f35]" href="/#about">हमारे बारे में</Link>
+          <Link className="transition hover:text-[#173f35]" href="/about">हमारे बारे में</Link>
         </nav>
 
         <Link href="/#tools" className="rounded-full bg-[#e7f3ee] px-4 py-2 text-sm font-bold text-[#173f35] transition hover:bg-[#d6eae2]">
