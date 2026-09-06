@@ -24,7 +24,7 @@ export default function HindiKrutidevWordPage() {
             </nav>
             <div className="mt-8 max-w-4xl">
               <div className="inline-flex items-center gap-2 rounded-full border border-[#173f35]/15 bg-white/75 px-4 py-2 text-sm font-bold text-[#173f35] shadow-sm">
-                <span aria-hidden="true">🔤</span> Browser में सुरक्षित • MeshAPI खर्च ₹0
+                <span aria-hidden="true">🔤</span> Free browser OCR • Editable tables
               </div>
               <h1 className="mt-6 text-4xl font-black tracking-[-0.04em] text-[#132b25] sm:text-6xl">PDF/JPG से Editable<br className="hidden sm:block" /> Hindi Word File</h1>
               <p className="mt-5 max-w-3xl text-lg leading-8 text-slate-600">

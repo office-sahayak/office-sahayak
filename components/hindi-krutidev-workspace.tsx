@@ -356,6 +356,62 @@ async function enhanceForOcr(source: Blob, printedTextOnly: boolean, optimizePho
   return canvasToBlob(canvas);
 }
 
+function otsuThreshold(histogram: Uint32Array, total: number) {
+  let weightedTotal = 0;
+  for (let value = 0; value < histogram.length; value += 1) {
+    weightedTotal += value * histogram[value];
+  }
+
+  let backgroundCount = 0;
+  let backgroundWeighted = 0;
+  let bestThreshold = 160;
+  let bestVariance = -1;
+  for (let threshold = 0; threshold < histogram.length; threshold += 1) {
+    backgroundCount += histogram[threshold];
+    if (!backgroundCount) continue;
+    const foregroundCount = total - backgroundCount;
+    if (!foregroundCount) break;
+    backgroundWeighted += threshold * histogram[threshold];
+    const backgroundMean = backgroundWeighted / backgroundCount;
+    const foregroundMean = (weightedTotal - backgroundWeighted) / foregroundCount;
+    const variance = backgroundCount * foregroundCount * (backgroundMean - foregroundMean) ** 2;
+    if (variance > bestVariance) {
+      bestVariance = variance;
+      bestThreshold = threshold;
+    }
+  }
+  return Math.min(220, Math.max(95, bestThreshold + 10));
+}
+
+async function binarizeForOcr(source: Blob) {
+  const bitmap = await createImageBitmap(source);
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("OCR की दूसरी जाँच के लिए page तैयार नहीं हो सका।");
+  context.drawImage(bitmap, 0, 0);
+  bitmap.close();
+
+  const image = context.getImageData(0, 0, canvas.width, canvas.height);
+  const histogram = new Uint32Array(256);
+  for (let offset = 0; offset < image.data.length; offset += 4) {
+    const gray = Math.round(image.data[offset] * 0.299 + image.data[offset + 1] * 0.587 + image.data[offset + 2] * 0.114);
+    histogram[gray] += 1;
+  }
+  const threshold = otsuThreshold(histogram, canvas.width * canvas.height);
+  for (let offset = 0; offset < image.data.length; offset += 4) {
+    const gray = Math.round(image.data[offset] * 0.299 + image.data[offset + 1] * 0.587 + image.data[offset + 2] * 0.114);
+    const value = gray <= threshold ? 0 : 255;
+    image.data[offset] = value;
+    image.data[offset + 1] = value;
+    image.data[offset + 2] = value;
+    image.data[offset + 3] = 255;
+  }
+  context.putImageData(image, 0, 0);
+  return canvasToBlob(canvas);
+}
+
 function normalizeListNumber(token: string) {
   const devanagariDigits = "०१२३४५६७८९";
   let normalized = Array.from(token.replace(/^।/, "")).map((character) => {
@@ -528,7 +584,7 @@ function replaceDigitGroups(source: string, replacements: string[]) {
   });
 }
 
-async function refinePdfNumbers(
+async function refineNumbers(
   worker: Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>>,
   source: Blob,
   blocks: PhotoTextBlock[],
@@ -738,6 +794,89 @@ function flattenWords(blocks: PhotoTextBlock[] | null, cleanPhoto: boolean) {
   return blocks?.flatMap((block) => block.paragraphs.flatMap((paragraph) => (
     paragraph.lines.flatMap((line) => line.words)
   ))).filter((word) => !cleanPhoto || keepPhotoWord(word)) ?? [];
+}
+
+function spatialOverlapRatio(first: OcrBbox, second: OcrBbox) {
+  const overlapWidth = Math.max(0, Math.min(first.x1, second.x1) - Math.max(first.x0, second.x0));
+  const overlapHeight = Math.max(0, Math.min(first.y1, second.y1) - Math.max(first.y0, second.y0));
+  const firstArea = Math.max(1, (first.x1 - first.x0) * (first.y1 - first.y0));
+  const secondArea = Math.max(1, (second.x1 - second.x0) * (second.y1 - second.y0));
+  return overlapWidth * overlapHeight / Math.min(firstArea, secondArea);
+}
+
+function recognitionWordQuality(word: PhotoTextWord) {
+  const token = word.text.trim();
+  const letters = (token.match(/[A-Za-z\u0900-\u097f]/gu) ?? []).length;
+  const devanagari = (token.match(/[\u0900-\u097f]/gu) ?? []).length;
+  const strayLatin = containsDevanagari(token) ? (token.match(/[A-Za-z]/gu) ?? []).length : 0;
+  const languageBonus = letters ? devanagari / letters * 14 : 0;
+  const numericBonus = /^[0-9\u0966-\u096f.,:/()&%+\-]+$/u.test(token) ? 5 : 0;
+  const lengthPenalty = token.length === 1 && !/[0-9\u0966-\u096f।]/u.test(token) ? 3 : 0;
+  return word.confidence + languageBonus + numericBonus - strayLatin * 2 - lengthPenalty;
+}
+
+function mergeAlternativeRecognition(primary: PhotoTextBlock[] | null, alternative: PhotoTextBlock[] | null) {
+  if (!primary?.length || !alternative?.length) return 0;
+  const alternatives = flattenWords(alternative, false);
+  const used = new Set<PhotoTextWord>();
+  let corrections = 0;
+
+  for (const word of flattenWords(primary, false)) {
+    const wordCenter = center(word.bbox);
+    const wordHeight = Math.max(1, word.bbox.y1 - word.bbox.y0);
+    const candidate = alternatives
+      .filter((alternativeWord) => !used.has(alternativeWord))
+      .map((alternativeWord) => {
+        const overlap = spatialOverlapRatio(word.bbox, alternativeWord.bbox);
+        const alternativeCenter = center(alternativeWord.bbox);
+        const centerDistance = Math.hypot(wordCenter.x - alternativeCenter.x, wordCenter.y - alternativeCenter.y);
+        const primaryWidth = Math.max(1, word.bbox.x1 - word.bbox.x0);
+        const alternativeWidth = Math.max(1, alternativeWord.bbox.x1 - alternativeWord.bbox.x0);
+        const widthRatio = alternativeWidth / primaryWidth;
+        return { alternativeWord, overlap, score: overlap * 100 - centerDistance / wordHeight * 8, widthRatio };
+      })
+      .filter(({ overlap, score, widthRatio }) => overlap >= 0.35 && score >= 20 && widthRatio >= 0.45 && widthRatio <= 2.2)
+      .sort((left, right) => right.score - left.score)[0]?.alternativeWord;
+    if (!candidate) continue;
+    used.add(candidate);
+
+    const primaryText = word.text.trim();
+    const candidateText = candidate.text.trim();
+    if (!candidateText || candidateText === primaryText) {
+      word.confidence = Math.max(word.confidence, candidate.confidence);
+      continue;
+    }
+
+    const primaryHasDigits = /[0-9\u0966-\u096f]/u.test(primaryText);
+    const candidateHasDigits = /[0-9\u0966-\u096f]/u.test(candidateText);
+    const primaryDevanagari = (primaryText.match(/[\u0900-\u097f]/gu) ?? []).length;
+    const candidateDevanagari = (candidateText.match(/[\u0900-\u097f]/gu) ?? []).length;
+    const primaryLetters = (primaryText.match(/[A-Za-z\u0900-\u097f]/gu) ?? []).length;
+    const candidateLetters = (candidateText.match(/[A-Za-z\u0900-\u097f]/gu) ?? []).length;
+
+    // The dedicated numeric pass below is safer for dates and amounts. Letting
+    // the sparse-text pass touch those tokens introduced suffixes such as "A"
+    // and dropped list punctuation in otherwise correct OCR output.
+    if (primaryHasDigits || candidateHasDigits) continue;
+    // Never replace recognized Hindi with an English-only guess. This protects
+    // short legacy-font abbreviations such as "म.प्र." from high-confidence
+    // Latin false positives.
+    if (primaryDevanagari > 0 && candidateDevanagari === 0) continue;
+    // Punctuation-only alternatives do not contain enough evidence to improve
+    // a word and were responsible for changes around registration numbers.
+    if (primaryLetters === 0 && candidateLetters === 0) continue;
+
+    const qualityGain = recognitionWordQuality(candidate) - recognitionWordQuality(word);
+    const introducesDevanagari = primaryDevanagari === 0 && candidateDevanagari > 0;
+    const shouldReplace = introducesDevanagari
+      ? candidate.confidence >= word.confidence - 2
+      : qualityGain >= 8;
+    if (!shouldReplace) continue;
+    word.text = candidateText;
+    word.confidence = candidate.confidence;
+    corrections += 1;
+  }
+  return corrections;
 }
 
 async function detectEditableTables(source: Blob, blocks: PhotoTextBlock[] | null, cleanPhoto: boolean) {
@@ -1145,6 +1284,7 @@ export function HindiKrutidevWorkspace() {
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("File चुनकर Hindi text निकालें।");
   const [error, setError] = useState<string | null>(null);
+  const [ocrNotice, setOcrNotice] = useState<string | null>(null);
 
   const totalCharacters = useMemo(() => pages.reduce((sum, page) => (
     sum + page.text.length + page.tables.reduce((tableSum, table) => (
@@ -1155,6 +1295,7 @@ export function HindiKrutidevWorkspace() {
 
   async function chooseFile(selected: File) {
     setError(null);
+    setOcrNotice(null);
     setImageQualityWarning(null);
     if (!isSupportedFile(selected)) {
       setError("केवल PDF, JPG, JPEG या PNG file चुनें।");
@@ -1192,6 +1333,7 @@ export function HindiKrutidevWorkspace() {
     setProgress(0);
     setStatus("File चुनकर Hindi text निकालें।");
     setError(null);
+    setOcrNotice(null);
   }
 
   async function runOcr() {
@@ -1199,6 +1341,7 @@ export function HindiKrutidevWorkspace() {
     setIsWorking(true);
     setPages([]);
     setError(null);
+    setOcrNotice(null);
     setProgress(2);
     setStatus("Pages तैयार हो रहे हैं…");
 
@@ -1213,7 +1356,8 @@ export function HindiKrutidevWorkspace() {
         : await prepareImage(file);
 
       const { createWorker, OEM, PSM } = await import("tesseract.js");
-      setStatus("Hindi पढ़ने की सुविधा पहली बार load हो रही है…");
+      const primaryMode = isPdf ? PSM.AUTO : PSM.SINGLE_BLOCK;
+      setStatus("Free Hindi OCR पहली बार load हो रहा है…");
       worker = await createWorker(["hin", "eng"], OEM.LSTM_ONLY, {
         logger: (message) => {
           if (message.status === "recognizing text") {
@@ -1224,11 +1368,12 @@ export function HindiKrutidevWorkspace() {
       });
       await worker.setParameters({
         preserve_interword_spaces: "1",
-        tessedit_pageseg_mode: isPdf ? PSM.AUTO : PSM.SINGLE_BLOCK,
+        tessedit_pageseg_mode: primaryMode,
         user_defined_dpi: "300",
       });
 
       const recognized: RecognizedPage[] = [];
+      let improvedWords = 0;
       for (let index = 0; index < prepared.length; index += 1) {
         const preparedPage = prepared[index];
         if (isPdf && preparedPage.embeddedText) {
@@ -1252,28 +1397,46 @@ export function HindiKrutidevWorkspace() {
           continue;
         }
 
-        setStatus(`Page ${index + 1}/${prepared.length} साफ़ करके Hindi text पढ़ा जा रहा है…`);
+        setStatus(`Page ${index + 1}/${prepared.length} की पहली Hindi OCR जाँच चल रही है…`);
         const ocrImage = await enhanceForOcr(preparedPage.blob, printedTextOnly, true);
         const result = await worker.recognize(ocrImage, {}, { blocks: true, text: true });
         const blocks = result.data.blocks as PhotoTextBlock[] | null;
+        const fallbackText = result.data.text.trim();
+
+        if (blocks?.length) {
+          setStatus(`Page ${index + 1}/${prepared.length} की दूसरी Hindi OCR जाँच चल रही है…`);
+          const binaryImage = await binarizeForOcr(ocrImage);
+          await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
+          try {
+            const alternative = await worker.recognize(binaryImage, {}, { blocks: true });
+            improvedWords += mergeAlternativeRecognition(
+              blocks,
+              alternative.data.blocks as PhotoTextBlock[] | null,
+            );
+          } finally {
+            await worker.setParameters({ tessedit_pageseg_mode: primaryMode });
+          }
+        }
+
         let numericCorrections = 0;
         let uncertainNumbers = 0;
-        if (isPdf && blocks?.length) {
+        if (blocks?.length) {
           setStatus(`Page ${index + 1}/${prepared.length} की तारीख और अंक दोबारा जाँचे जा रहे हैं…`);
-          const numericResult = await refinePdfNumbers(
+          const numericResult = await refineNumbers(
             worker,
-            preparedPage.blob,
+            ocrImage,
             blocks,
-            preparedPage.numberHints,
+            isPdf ? preparedPage.numberHints : [],
             PSM.SINGLE_WORD,
-            PSM.AUTO,
+            primaryMode,
           );
           numericCorrections = numericResult.corrections;
           uncertainNumbers = numericResult.uncertainNumbers;
         }
         setStatus(`Page ${index + 1}/${prepared.length} में editable tables पहचानी जा रही हैं…`);
-        const tables = await detectEditableTables(ocrImage, blocks, !isPdf).catch(() => []);
-        const extractedText = textWithTableMarkers(blocks, result.data.text.trim(), tables, !isPdf);
+        const cleanPhoto = !isPdf;
+        const tables = await detectEditableTables(ocrImage, blocks, cleanPhoto).catch(() => []);
+        const extractedText = textWithTableMarkers(blocks, fallbackText, tables, cleanPhoto);
         recognized.push({
           height: preparedPage.height,
           numericCorrections,
@@ -1288,6 +1451,9 @@ export function HindiKrutidevWorkspace() {
 
       setPages(recognized);
       setProgress(100);
+      setOcrNotice(improvedWords
+        ? `दूसरी free OCR जाँच से ${improvedWords} कम-स्पष्ट शब्द बेहतर पढ़े गए।`
+        : "दो free OCR passes और तारीख/अंक की अलग जाँच पूरी हुई।");
       const recognizedTables = recognized.reduce((sum, page) => sum + page.tables.length, 0);
       setStatus(recognizedTables
         ? `Hindi text और ${recognizedTables} editable table तैयार हैं। जाँचकर Word download करें।`
@@ -1297,7 +1463,8 @@ export function HindiKrutidevWorkspace() {
       setStatus("Hindi text नहीं निकाला जा सका।");
       setError(caughtError instanceof Error ? caughtError.message : "File पढ़ते समय समस्या आई। दोबारा प्रयास करें।");
     } finally {
-      if (worker) await worker.terminate().catch(() => undefined);
+      const activeWorker = worker as Awaited<ReturnType<typeof import("tesseract.js")["createWorker"]>> | null;
+      if (activeWorker) await activeWorker.terminate().catch(() => undefined);
       setIsWorking(false);
     }
   }
@@ -1379,7 +1546,7 @@ export function HindiKrutidevWorkspace() {
             }}
             className={`rounded-3xl border-2 border-dashed px-6 py-14 text-center transition sm:py-18 ${isDragging ? "border-[#2f6a59] bg-[#eaf4ef]" : "border-slate-300 bg-[#f8faf9] hover:border-[#7aa596]"}`}
           >
-            <span className="mx-auto grid size-16 place-items-center rounded-2xl bg-orange-50 text-3xl" aria-hidden="true">कृ</span>
+            <span className="mx-auto grid h-16 min-w-28 place-items-center rounded-2xl bg-orange-50 px-4 text-2xl font-bold" aria-hidden="true">कृपया</span>
             <h2 className="mt-5 text-2xl font-black text-slate-950">Hindi PDF या फोटो चुनें</h2>
             <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-slate-500">Scanned PDF, JPG, JPEG या PNG को यहाँ drop करें।</p>
             <label htmlFor="hindi-ocr-file" className="mt-6 inline-flex cursor-pointer items-center justify-center rounded-full bg-[#173f35] px-6 py-3 font-bold text-white shadow-lg shadow-[#173f35]/15 transition hover:-translate-y-0.5 hover:bg-[#0f3028]">
@@ -1409,10 +1576,16 @@ export function HindiKrutidevWorkspace() {
               </p>
             )}
 
+            {ocrNotice && (
+              <p className="mt-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold leading-6 text-sky-900" role="status">
+                {ocrNotice}
+              </p>
+            )}
+
             {!pages.length && (
               <div className="mt-7 rounded-3xl border border-slate-200 bg-white p-5 sm:p-6">
                 <h2 className="text-xl font-black text-slate-950">Hindi text पहचानें</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-500">File आपके browser में ही पढ़ी जाएगी। पहली बार Hindi language data load होने में थोड़ा समय लग सकता है।</p>
+                <p className="mt-2 text-sm leading-6 text-slate-500">दो अलग free OCR passes text पढ़ेंगे और तारीख/अंक की अलग जाँच करेंगे। पहली बार Hindi language data load होने में थोड़ा समय लग सकता है।</p>
                 <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
                   <input type="checkbox" checked={printedTextOnly} onChange={(event) => setPrintedTextOnly(event.target.checked)} disabled={isWorking} className="mt-1 size-4 accent-[#173f35]" />
                   <span>
@@ -1526,8 +1699,8 @@ export function HindiKrutidevWorkspace() {
       <aside className="space-y-4">
         <div className="rounded-3xl bg-[#173f35] p-6 text-white">
           <span className="text-3xl" aria-hidden="true">🔒</span>
-          <h2 className="mt-4 text-xl font-black">File पूरी तरह निजी</h2>
-          <p className="mt-2 text-sm leading-6 text-white/70">PDF या फोटो किसी server या MeshAPI पर upload नहीं होती। File आपके browser में ही पढ़ी जाती है।</p>
+          <h2 className="mt-4 text-xl font-black">पूरी तरह free और निजी</h2>
+          <p className="mt-2 text-sm leading-6 text-white/70">PDF या photo server पर upload नहीं होती। दोनों OCR passes आपके browser में चलते हैं और कोई API charge नहीं लगता।</p>
         </div>
         <div className="rounded-3xl border border-slate-200 bg-white p-6">
           <h2 className="text-lg font-black text-slate-950">दो editable Word files</h2>

@@ -1,7 +1,7 @@
 const popularTasks = [
   { href: "/tools/documents/hindi-krutidev-word", icon: "कृ", label: "PDF/JPG से Editable Hindi Word", tone: "bg-emerald-50" },
-  { href: "/tools/documents/pdf-merge", icon: "📎", label: "PDF मर्ज", tone: "bg-rose-50" },
-  { href: "/tools/calculators/emi-calculator", icon: "🧮", label: "EMI कैलकुलेटर", tone: "bg-amber-50" },
+  { href: "/tools/documents/word-to-pdf", icon: "📄", label: "Word से PDF", tone: "bg-rose-50" },
+  { href: "/tools/documents/excel-to-pdf", icon: "📊", label: "Excel से PDF", tone: "bg-amber-50" },
 ];
 
 export function HeroSection() {
