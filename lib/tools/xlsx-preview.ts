@@ -289,7 +289,7 @@ function displayNumber(raw: string, format: string) {
 }
 
 function dominantRange(cells: Array<{ column: number; row: number; value: string }>) {
-  const nonEmpty = cells.filter((cell) => cell.value !== "");
+  const nonEmpty = cells.filter((cell) => cell.value.trim() !== "");
   if (!nonEmpty.length) return { minColumn: 0, maxColumn: 0, minRow: 0, maxRow: 0, ignored: 0 };
   const counts = new Map<number, number>();
   for (const cell of nonEmpty) counts.set(cell.column, (counts.get(cell.column) ?? 0) + 1);
@@ -406,7 +406,7 @@ export async function parseXlsx(file: File): Promise<ParsedWorkbook> {
     }
 
     const detectedRange = sheetPrintArea(definedNames, sheetIndex) ?? dominantRange(parsedCells);
-    const hasData = parsedCells.some((cell) => cell.value !== ""
+    const hasData = parsedCells.some((cell) => cell.value.trim() !== ""
       && cell.column >= detectedRange.minColumn && cell.column <= detectedRange.maxColumn
       && cell.row >= detectedRange.minRow && cell.row <= detectedRange.maxRow);
     const rowElements = new Map(localElements(sheet, "row").map((row) => [Number(row.getAttribute("r") ?? 1) - 1, row]));
