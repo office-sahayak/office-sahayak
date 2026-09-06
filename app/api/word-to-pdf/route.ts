@@ -1,4 +1,4 @@
-import { convertDocxToPdf, LibreOfficeUnavailableError } from "@/lib/server/libreoffice-converter";
+import { convertDocxToPdf, LibreOfficeBusyError, LibreOfficeUnavailableError } from "@/lib/server/libreoffice-converter";
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
@@ -54,7 +54,7 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
-    const status = error instanceof LibreOfficeUnavailableError ? 503 : 422;
+    const status = error instanceof LibreOfficeBusyError ? 429 : error instanceof LibreOfficeUnavailableError ? 503 : 422;
     const message = error instanceof Error ? error.message : "Word की PDF नहीं बन सकी।";
     return Response.json({ error: message }, { status });
   } finally {

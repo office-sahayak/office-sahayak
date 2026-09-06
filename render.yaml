@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: office-sahayak
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: ocr-test
+    autoDeployTrigger: commit
+    healthCheckPath: /api/health
+    envVars:
+      - key: LIBREOFFICE_MAX_CONVERSIONS
+        value: "1"
+      - key: LIBREOFFICE_TIMEOUT_MS
+        value: "120000"

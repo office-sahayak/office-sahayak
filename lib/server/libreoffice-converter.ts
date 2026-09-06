@@ -6,10 +6,19 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSZip from "jszip";
 
-const CONVERSION_TIMEOUT_MS = 75_000;
 const OUTPUT_LIMIT = 12_000;
 
+function boundedPositiveInteger(value: string | undefined, fallback: number, maximum: number) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? Math.min(parsed, maximum) : fallback;
+}
+
+const CONVERSION_TIMEOUT_MS = boundedPositiveInteger(process.env.LIBREOFFICE_TIMEOUT_MS, 75_000, 300_000);
+const MAX_CONCURRENT_CONVERSIONS = boundedPositiveInteger(process.env.LIBREOFFICE_MAX_CONVERSIONS, 2, 4);
+let activeLibreOfficeConversions = 0;
+
 export class LibreOfficeUnavailableError extends Error {}
+export class LibreOfficeBusyError extends Error {}
 
 export interface ExcelPrintArea {
   maxColumn: number;
@@ -184,44 +193,62 @@ async function createFontConfig(temporaryDirectory: string) {
     // System-installed fonts are still available when the optional bundled font is absent.
   }
   const fontConfigPath = path.join(temporaryDirectory, "fonts.conf");
-  await writeFile(fontConfigPath, `<?xml version="1.0"?>\n<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n<fontconfig><dir>${xmlAttributeText(fontsDirectory)}</dir><dir prefix="default">fonts</dir><cachedir>${xmlAttributeText(cacheDirectory)}</cachedir></fontconfig>`, "utf8");
+  await writeFile(fontConfigPath, `<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <dir>${xmlAttributeText(fontsDirectory)}</dir>
+  <dir prefix="default">fonts</dir>
+  <cachedir>${xmlAttributeText(cacheDirectory)}</cachedir>
+  <alias binding="strong"><family>Kruti Dev 010</family><prefer><family>DevLys 010</family></prefer></alias>
+  <alias binding="strong"><family>Kruti Dev 160</family><prefer><family>DevLys 010</family></prefer></alias>
+  <alias binding="strong"><family>DevLys 010 Thin</family><prefer><family>DevLys 010</family></prefer></alias>
+</fontconfig>`, "utf8");
   return fontConfigPath;
 }
 
 async function convertOfficeFileToPdf(source: Buffer, inputName: string, temporaryPrefix: string, emptyOutputMessage: string) {
-  const temporaryDirectory = await mkdtemp(path.join(tmpdir(), temporaryPrefix));
-  const inputPath = path.join(temporaryDirectory, inputName);
-  const outputDirectory = path.join(temporaryDirectory, "output");
-  const profileDirectory = path.join(temporaryDirectory, "libreoffice-profile");
+  if (activeLibreOfficeConversions >= MAX_CONCURRENT_CONVERSIONS) {
+    throw new LibreOfficeBusyError("Server पर PDF conversion चल रही है। थोड़ी देर बाद फिर प्रयास करें।");
+  }
+  activeLibreOfficeConversions += 1;
 
   try {
-    await Promise.all([mkdir(outputDirectory), mkdir(profileDirectory)]);
-    await writeFile(inputPath, source);
-    const fontConfigPath = await createFontConfig(temporaryDirectory);
-    const argumentsList = [
-      "--headless",
-      "--nologo",
-      "--nolockcheck",
-      "--nodefault",
-      "--nofirststartwizard",
-      `-env:UserInstallation=${pathToFileURL(profileDirectory).href}`,
-      "--convert-to",
-      "pdf",
-      "--outdir",
-      outputDirectory,
-      inputPath,
-    ];
-    await runLibreOffice(argumentsList, {
-      ...process.env,
-      FONTCONFIG_FILE: fontConfigPath,
-    });
+    const temporaryDirectory = await mkdtemp(path.join(tmpdir(), temporaryPrefix));
+    const inputPath = path.join(temporaryDirectory, inputName);
+    const outputDirectory = path.join(temporaryDirectory, "output");
+    const profileDirectory = path.join(temporaryDirectory, "libreoffice-profile");
 
-    const outputFiles = await readdir(outputDirectory);
-    const pdfName = outputFiles.find((name) => name.toLowerCase().endsWith(".pdf"));
-    if (!pdfName) throw new Error(emptyOutputMessage);
-    return await readFile(path.join(outputDirectory, pdfName));
+    try {
+      await Promise.all([mkdir(outputDirectory), mkdir(profileDirectory)]);
+      await writeFile(inputPath, source);
+      const fontConfigPath = await createFontConfig(temporaryDirectory);
+      const argumentsList = [
+        "--headless",
+        "--nologo",
+        "--nolockcheck",
+        "--nodefault",
+        "--nofirststartwizard",
+        `-env:UserInstallation=${pathToFileURL(profileDirectory).href}`,
+        "--convert-to",
+        "pdf",
+        "--outdir",
+        outputDirectory,
+        inputPath,
+      ];
+      await runLibreOffice(argumentsList, {
+        ...process.env,
+        FONTCONFIG_FILE: fontConfigPath,
+      });
+
+      const outputFiles = await readdir(outputDirectory);
+      const pdfName = outputFiles.find((name) => name.toLowerCase().endsWith(".pdf"));
+      if (!pdfName) throw new Error(emptyOutputMessage);
+      return await readFile(path.join(outputDirectory, pdfName));
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
   } finally {
-    await rm(temporaryDirectory, { recursive: true, force: true });
+    activeLibreOfficeConversions -= 1;
   }
 }
 
