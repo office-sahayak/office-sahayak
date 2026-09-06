@@ -13,8 +13,31 @@ interface NumericHint {
   text: string;
 }
 
+interface OcrBbox {
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+}
+
+interface PhotoTextWord {
+  bbox: OcrBbox;
+  confidence: number;
+  text: string;
+}
+
+interface PhotoTextBlock {
+  paragraphs: Array<{
+    lines: Array<{
+      bbox: OcrBbox;
+      words: PhotoTextWord[];
+    }>;
+  }>;
+}
+
 interface PreparedPage {
   blob: Blob;
+  embeddedBlocks: PhotoTextBlock[] | null;
   embeddedText: string | null;
   height: number;
   numberHints: NumericHint[];
@@ -22,10 +45,23 @@ interface PreparedPage {
   width: number;
 }
 
+interface RecognizedTableCell {
+  columnSpan: number;
+  text: string;
+}
+
+interface RecognizedTable {
+  bbox: OcrBbox;
+  columnRatios: number[];
+  pageFrame: boolean;
+  rows: RecognizedTableCell[][];
+}
+
 interface RecognizedPage {
   height: number;
   numericCorrections: number;
   png: Uint8Array;
+  tables: RecognizedTable[];
   text: string;
   uncertainNumbers: number;
   width: number;
@@ -53,6 +89,7 @@ function canvasToPng(canvas: HTMLCanvasElement) {
       try {
         resolve({
           blob,
+          embeddedBlocks: null,
           embeddedText: null,
           height: canvas.height,
           numberHints: [],
@@ -115,6 +152,57 @@ function embeddedNumberHints(
   return hints;
 }
 
+function embeddedPageBlocks(
+  items: PdfTextItem[],
+  scale: number,
+  transform: (left: number[], right: number[]) => number[],
+  viewportTransform: number[],
+) {
+  const words = items.flatMap((item) => {
+    const device = transform(viewportTransform, item.transform);
+    const sourceWidth = Math.max(1, item.width * scale);
+    const sourceHeight = Math.max(8, Math.abs(device[3]), item.height * scale);
+    return Array.from(item.str.matchAll(/\S+/gu)).map((match) => {
+      const start = match.index ?? 0;
+      const end = start + match[0].length;
+      return {
+        bbox: {
+          x0: device[4] + sourceWidth * (start / Math.max(1, item.str.length)),
+          x1: device[4] + sourceWidth * (end / Math.max(1, item.str.length)),
+          y0: device[5] - sourceHeight * 1.15,
+          y1: device[5] + sourceHeight * 0.25,
+        },
+        confidence: 100,
+        text: match[0],
+      } satisfies PhotoTextWord;
+    });
+  }).sort((left, right) => center(left.bbox).y - center(right.bbox).y || left.bbox.x0 - right.bbox.x0);
+
+  const lines: Array<{ bbox: OcrBbox; words: PhotoTextWord[] }> = [];
+  for (const word of words) {
+    const wordCenter = center(word.bbox);
+    const line = lines.findLast((candidate) => {
+      const lineCenter = center(candidate.bbox);
+      const height = Math.max(word.bbox.y1 - word.bbox.y0, candidate.bbox.y1 - candidate.bbox.y0);
+      return Math.abs(wordCenter.y - lineCenter.y) <= height * 0.55;
+    });
+    if (line) {
+      line.words.push(word);
+      line.words.sort((left, right) => left.bbox.x0 - right.bbox.x0);
+      line.bbox = line.words.reduce((bbox, current) => ({
+        x0: Math.min(bbox.x0, current.bbox.x0),
+        x1: Math.max(bbox.x1, current.bbox.x1),
+        y0: Math.min(bbox.y0, current.bbox.y0),
+        y1: Math.max(bbox.y1, current.bbox.y1),
+      }), line.bbox);
+    } else {
+      lines.push({ bbox: { ...word.bbox }, words: [word] });
+    }
+  }
+
+  return lines.length ? [{ paragraphs: [{ lines }] }] satisfies PhotoTextBlock[] : null;
+}
+
 async function prepareImage(file: File) {
   const bitmap = await createImageBitmap(file);
   const maxDimension = 2200;
@@ -162,6 +250,12 @@ async function preparePdf(file: File, onPage: (page: number, total: number) => v
     await page.render({ canvas, viewport, background: "#ffffff" }).promise;
     const preparedPage = await canvasToPng(canvas);
     preparedPage.embeddedText = reliableEmbeddedHindiText(hiddenText) ? hiddenText : null;
+    preparedPage.embeddedBlocks = embeddedPageBlocks(
+      textItems,
+      scale,
+      pdfjs.Util.transform,
+      Array.from(viewport.transform),
+    );
     preparedPage.numberHints = embeddedNumberHints(
       textItems,
       scale,
@@ -303,28 +397,6 @@ function repairOrderedListNumbers(text: string) {
     lines[candidate.lineIndex] = `${candidate.match[1]}${inferredStart + position}. ${candidate.match[3]}`;
   });
   return lines.join("\n");
-}
-
-interface OcrBbox {
-  x0: number;
-  x1: number;
-  y0: number;
-  y1: number;
-}
-
-interface PhotoTextWord {
-  bbox: OcrBbox;
-  confidence: number;
-  text: string;
-}
-
-interface PhotoTextBlock {
-  paragraphs: Array<{
-    lines: Array<{
-      bbox: OcrBbox;
-      words: PhotoTextWord[];
-    }>;
-  }>;
 }
 
 const NUMERIC_FRAGMENT = /[0-9\u0966-\u096fOoIl|\[\]]+/g;
@@ -531,6 +603,18 @@ function blockRecognitionText(blocks: PhotoTextBlock[] | null, fallback: string)
   return paragraphs.join("\n\n").trim() || fallback;
 }
 
+function keepPhotoWord(word: PhotoTextWord) {
+  const token = word.text.trim();
+  if (!token) return false;
+  if (containsDevanagari(token)) return true;
+  if (/[@]|https?:|www\./i.test(token)) return true;
+  if (/^[।|]?[0-9०-९][0-9०-९.,:/()|-]*$/.test(token)) return true;
+  if (/^[0-9०-९oOlI|aAzZsSwW]{1,3}[.,)।:-]*$/.test(token)) return true;
+  if (/^(?:NCD|ICMIS|IOMIS|RTI|PDF|PAN|GST|IFSC)[.,:/()|-]*$/i.test(token)) return true;
+  if (/^[A-Z]{2,10}[.,:/()|-]*$/.test(token)) return true;
+  return word.confidence >= 70;
+}
+
 function cleanPhotoRecognition(blocks: PhotoTextBlock[] | null, fallback: string) {
   if (!blocks?.length) return fallback;
   const paragraphs: string[] = [];
@@ -539,15 +623,7 @@ function cleanPhotoRecognition(blocks: PhotoTextBlock[] | null, fallback: string
     for (const paragraph of block.paragraphs) {
       const lines = paragraph.lines.flatMap((line) => {
         const words = line.words.flatMap((word) => {
-          const token = word.text.trim();
-          if (!token) return [];
-          if (containsDevanagari(token)) return [token];
-          if (/[@]|https?:|www\./i.test(token)) return [token];
-          if (/^[।|]?[0-9०-९][0-9०-९.,:/()|-]*$/.test(token)) return [token];
-          if (/^[0-9०-९oOlI|aAzZsSwW]{1,3}[.,)।:-]*$/.test(token)) return [token];
-          if (/^(?:NCD|ICMIS|IOMIS|RTI|PDF|PAN|GST|IFSC)[.,:/()|-]*$/i.test(token)) return [token];
-          if (/^[A-Z]{2,10}[.,:/()|-]*$/.test(token)) return [token];
-          return word.confidence >= 70 ? [token] : [];
+          return keepPhotoWord(word) ? [word.text.trim()] : [];
         });
         return words.length ? [words.join(" ")] : [];
       });
@@ -559,6 +635,307 @@ function cleanPhotoRecognition(blocks: PhotoTextBlock[] | null, fallback: string
   const cleanedHindi = (cleaned.match(/[\u0900-\u097f]/g) ?? []).length;
   const fallbackHindi = (fallback.match(/[\u0900-\u097f]/g) ?? []).length;
   return cleaned && cleanedHindi >= fallbackHindi * 0.8 ? cleaned : fallback;
+}
+
+interface DetectedLine {
+  end: number;
+  position: number;
+  start: number;
+}
+
+function longestDarkRun(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  position: number,
+  direction: "horizontal" | "vertical",
+) {
+  const length = direction === "horizontal" ? width : height;
+  let best: { darkPixels: number; end: number; start: number } | null = null;
+  let currentDarkPixels = 0;
+  let currentStart = -1;
+  let lastDark = -10;
+
+  for (let offset = 0; offset < length; offset += 1) {
+    const pixel = direction === "horizontal"
+      ? mask[position * width + offset]
+      : mask[offset * width + position];
+    if (!pixel) continue;
+    if (currentStart < 0 || offset - lastDark > 3) {
+      if (currentStart >= 0 && (!best || lastDark - currentStart > best.end - best.start)) {
+        best = { darkPixels: currentDarkPixels, end: lastDark, start: currentStart };
+      }
+      currentStart = offset;
+      currentDarkPixels = 0;
+    }
+    currentDarkPixels += 1;
+    lastDark = offset;
+  }
+
+  if (currentStart >= 0 && (!best || lastDark - currentStart > best.end - best.start)) {
+    best = { darkPixels: currentDarkPixels, end: lastDark, start: currentStart };
+  }
+  return best;
+}
+
+function mergeParallelLines(lines: DetectedLine[]) {
+  const groups: Array<{ lines: DetectedLine[]; start: number; end: number }> = [];
+  for (const line of lines.sort((left, right) => left.position - right.position)) {
+    const group = groups.findLast((candidate) => {
+      const previous = candidate.lines.at(-1);
+      if (!previous || line.position - previous.position > 2) return false;
+      const overlap = Math.max(0, Math.min(line.end, candidate.end) - Math.max(line.start, candidate.start));
+      const shortest = Math.max(1, Math.min(line.end - line.start, candidate.end - candidate.start));
+      return overlap / shortest >= 0.72;
+    });
+    if (group) {
+      group.lines.push(line);
+      group.start = Math.min(group.start, line.start);
+      group.end = Math.max(group.end, line.end);
+    } else {
+      groups.push({ lines: [line], start: line.start, end: line.end });
+    }
+  }
+  return groups.map((group) => ({
+    end: group.end,
+    position: group.lines.reduce((sum, line) => sum + line.position, 0) / group.lines.length,
+    start: group.start,
+  }));
+}
+
+function mergedPositions(values: number[], tolerance: number) {
+  const groups: number[][] = [];
+  for (const value of [...values].sort((left, right) => left - right)) {
+    const group = groups.at(-1);
+    if (group && value - group.at(-1)! <= tolerance) group.push(value);
+    else groups.push([value]);
+  }
+  return groups.map((group) => group.reduce((sum, value) => sum + value, 0) / group.length);
+}
+
+function wordsInReadingOrder(words: PhotoTextWord[]) {
+  const lines: PhotoTextWord[][] = [];
+  for (const word of [...words].sort((left, right) => center(left.bbox).y - center(right.bbox).y || left.bbox.x0 - right.bbox.x0)) {
+    const wordCenter = center(word.bbox);
+    const line = lines.findLast((candidate) => {
+      const candidateBbox = candidate.reduce((bbox, current) => ({
+        x0: Math.min(bbox.x0, current.bbox.x0),
+        x1: Math.max(bbox.x1, current.bbox.x1),
+        y0: Math.min(bbox.y0, current.bbox.y0),
+        y1: Math.max(bbox.y1, current.bbox.y1),
+      }), candidate[0].bbox);
+      const candidateCenter = center(candidateBbox);
+      const height = Math.max(word.bbox.y1 - word.bbox.y0, candidateBbox.y1 - candidateBbox.y0);
+      return Math.abs(wordCenter.y - candidateCenter.y) <= height * 0.55;
+    });
+    if (line) line.push(word);
+    else lines.push([word]);
+  }
+  return lines.map((line) => line.sort((left, right) => left.bbox.x0 - right.bbox.x0).map((word) => word.text.trim()).filter(Boolean).join(" ")).filter(Boolean).join("\n");
+}
+
+function flattenWords(blocks: PhotoTextBlock[] | null, cleanPhoto: boolean) {
+  return blocks?.flatMap((block) => block.paragraphs.flatMap((paragraph) => (
+    paragraph.lines.flatMap((line) => line.words)
+  ))).filter((word) => !cleanPhoto || keepPhotoWord(word)) ?? [];
+}
+
+async function detectEditableTables(source: Blob, blocks: PhotoTextBlock[] | null, cleanPhoto: boolean) {
+  if (!blocks?.length) return [];
+  const bitmap = await createImageBitmap(source);
+  try {
+    const detectionScale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * detectionScale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * detectionScale));
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return [];
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    const mask = new Uint8Array(canvas.width * canvas.height);
+    for (let pixel = 0, offset = 0; pixel < mask.length; pixel += 1, offset += 4) {
+      const gray = pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 + pixels[offset + 2] * 0.114;
+      mask[pixel] = gray < 185 && pixels[offset + 3] > 128 ? 1 : 0;
+    }
+
+    const horizontal: DetectedLine[] = [];
+    const minimumHorizontal = Math.max(60, canvas.width * 0.12);
+    for (let y = 0; y < canvas.height; y += 1) {
+      const run = longestDarkRun(mask, canvas.width, canvas.height, y, "horizontal");
+      if (!run) continue;
+      const span = run.end - run.start + 1;
+      if (span >= minimumHorizontal && run.darkPixels / span >= 0.7) {
+        horizontal.push({ end: run.end, position: y, start: run.start });
+      }
+    }
+
+    const vertical: DetectedLine[] = [];
+    const minimumVertical = Math.max(35, canvas.height * 0.025);
+    for (let x = 0; x < canvas.width; x += 1) {
+      const run = longestDarkRun(mask, canvas.width, canvas.height, x, "vertical");
+      if (!run) continue;
+      const span = run.end - run.start + 1;
+      if (span >= minimumVertical && run.darkPixels / span >= 0.7) {
+        vertical.push({ end: run.end, position: x, start: run.start });
+      }
+    }
+
+    const horizontalLines = mergeParallelLines(horizontal);
+    const verticalLines = mergeParallelLines(vertical);
+    const lineCount = horizontalLines.length + verticalLines.length;
+    const parents = Array.from({ length: lineCount }, (_, index) => index);
+    const root = (sourceIndex: number) => {
+      let index = sourceIndex;
+      while (parents[index] !== index) {
+        parents[index] = parents[parents[index]];
+        index = parents[index];
+      }
+      return index;
+    };
+    const join = (leftIndex: number, rightIndex: number) => {
+      const leftRoot = root(leftIndex);
+      const rightRoot = root(rightIndex);
+      if (leftRoot !== rightRoot) parents[rightRoot] = leftRoot;
+    };
+    const intersectionTolerance = 3;
+    horizontalLines.forEach((horizontalLine, horizontalIndex) => {
+      verticalLines.forEach((verticalLine, verticalIndex) => {
+        if (
+          verticalLine.position >= horizontalLine.start - intersectionTolerance
+          && verticalLine.position <= horizontalLine.end + intersectionTolerance
+          && horizontalLine.position >= verticalLine.start - intersectionTolerance
+          && horizontalLine.position <= verticalLine.end + intersectionTolerance
+        ) {
+          join(horizontalIndex, horizontalLines.length + verticalIndex);
+        }
+      });
+    });
+
+    const components = new Map<number, number[]>();
+    for (let index = 0; index < lineCount; index += 1) {
+      const component = components.get(root(index)) ?? [];
+      component.push(index);
+      components.set(root(index), component);
+    }
+
+    const scaleX = bitmap.width / canvas.width;
+    const scaleY = bitmap.height / canvas.height;
+    const words = flattenWords(blocks, cleanPhoto);
+    const tables: RecognizedTable[] = [];
+    for (const component of components.values()) {
+      const tableHorizontal = component.filter((index) => index < horizontalLines.length).map((index) => horizontalLines[index]);
+      const tableVertical = component.filter((index) => index >= horizontalLines.length).map((index) => verticalLines[index - horizontalLines.length]);
+      if (tableHorizontal.length < 2 || tableVertical.length < 2) continue;
+      const orderedHorizontalStarts = tableHorizontal.map((line) => line.start).sort((left, right) => left - right);
+      const orderedHorizontalEnds = tableHorizontal.map((line) => line.end).sort((left, right) => left - right);
+      const horizontalStart = orderedHorizontalStarts[Math.floor(orderedHorizontalStarts.length / 2)];
+      const horizontalEnd = orderedHorizontalEnds[Math.floor(orderedHorizontalEnds.length / 2)];
+      const xPositions = mergedPositions([
+        ...tableVertical.map((line) => line.position),
+        horizontalStart,
+        horizontalEnd,
+      ], 3);
+      const yPositions = mergedPositions(tableHorizontal.map((line) => line.position), 3);
+      if (xPositions.length < 2 || yPositions.length < 2 || xPositions.length > 25 || yPositions.length > 100) continue;
+      const width = xPositions.at(-1)! - xPositions[0];
+      const height = yPositions.at(-1)! - yPositions[0];
+      if (width * height < canvas.width * canvas.height * 0.001) continue;
+      const pageFrame = xPositions.length === 2 && yPositions.length === 2
+        && width >= canvas.width * 0.75 && height >= canvas.height * 0.65;
+      if (xPositions.length === 2 && yPositions.length === 2 && !pageFrame) continue;
+
+      const sourceX = xPositions.map((position) => position * scaleX);
+      const sourceY = yPositions.map((position) => position * scaleY);
+      const sourceVertical = tableVertical.map((line) => ({
+        end: line.end * scaleY,
+        position: line.position * scaleX,
+        start: line.start * scaleY,
+      }));
+      const bbox = {
+        x0: sourceX[0],
+        x1: sourceX.at(-1)!,
+        y0: sourceY[0],
+        y1: sourceY.at(-1)!,
+      };
+      const tableWords = words.filter((word) => {
+        const wordCenter = center(word.bbox);
+        return wordCenter.x >= bbox.x0 - 4 && wordCenter.x <= bbox.x1 + 4
+          && wordCenter.y >= bbox.y0 - 4 && wordCenter.y <= bbox.y1 + 4;
+      });
+      const rows: RecognizedTableCell[][] = [];
+      for (let rowIndex = 0; rowIndex < sourceY.length - 1; rowIndex += 1) {
+        const top = sourceY[rowIndex];
+        const bottom = sourceY[rowIndex + 1];
+        const rowHeight = Math.max(1, bottom - top);
+        const activeBoundaries = [0];
+        for (let columnIndex = 1; columnIndex < sourceX.length - 1; columnIndex += 1) {
+          const boundary = sourceX[columnIndex];
+          const boundaryPresent = sourceVertical.some((line) => {
+            const overlap = Math.max(0, Math.min(bottom, line.end) - Math.max(top, line.start));
+            return Math.abs(line.position - boundary) <= 5 && overlap >= Math.max(3, rowHeight * 0.3);
+          });
+          if (boundaryPresent) activeBoundaries.push(columnIndex);
+        }
+        activeBoundaries.push(sourceX.length - 1);
+
+        const row: RecognizedTableCell[] = [];
+        for (let boundaryIndex = 0; boundaryIndex < activeBoundaries.length - 1; boundaryIndex += 1) {
+          const leftIndex = activeBoundaries[boundaryIndex];
+          const rightIndex = activeBoundaries[boundaryIndex + 1];
+          const left = sourceX[leftIndex];
+          const right = sourceX[rightIndex];
+          const cellWords = tableWords.filter((word) => {
+            const wordCenter = center(word.bbox);
+            return wordCenter.x >= left - 3 && wordCenter.x < right + 3
+              && wordCenter.y >= top - 3 && wordCenter.y < bottom + 3;
+          });
+          row.push({ columnSpan: rightIndex - leftIndex, text: wordsInReadingOrder(cellWords) });
+        }
+        rows.push(row);
+      }
+
+      const columnWidths = sourceX.slice(1).map((position, index) => position - sourceX[index]);
+      const totalWidth = columnWidths.reduce((sum, value) => sum + value, 0);
+      tables.push({
+        bbox,
+        columnRatios: columnWidths.map((value) => value / Math.max(1, totalWidth)),
+        pageFrame,
+        rows,
+      });
+    }
+    return tables.sort((left, right) => left.bbox.y0 - right.bbox.y0 || left.bbox.x0 - right.bbox.x0);
+  } finally {
+    bitmap.close();
+  }
+}
+
+function textWithTableMarkers(
+  blocks: PhotoTextBlock[] | null,
+  fallback: string,
+  tables: RecognizedTable[],
+  cleanPhoto: boolean,
+) {
+  if (!tables.length) return cleanPhoto ? cleanPhotoRecognition(blocks, fallback) : blockRecognitionText(blocks, fallback);
+  if (!blocks?.length) return `${fallback.trim()}\n\n${tables.map((_, index) => `[[TABLE:${index + 1}]]`).join("\n\n")}`.trim();
+  const elements: Array<{ order: number; text: string }> = [];
+  for (const block of blocks) {
+    for (const paragraph of block.paragraphs) {
+      for (const line of paragraph.lines) {
+        const outsideWords = line.words.filter((word) => {
+          if (cleanPhoto && !keepPhotoWord(word)) return false;
+          const wordCenter = center(word.bbox);
+          return !tables.some((table) => wordCenter.x >= table.bbox.x0 - 4 && wordCenter.x <= table.bbox.x1 + 4
+            && wordCenter.y >= table.bbox.y0 - 4 && wordCenter.y <= table.bbox.y1 + 4);
+        });
+        const text = wordsInReadingOrder(outsideWords);
+        if (text) elements.push({ order: line.bbox.y0, text });
+      }
+    }
+  }
+  tables.forEach((table, index) => elements.push({ order: table.bbox.y0, text: `[[TABLE:${index + 1}]]` }));
+  return elements.sort((left, right) => left.order - right.order).map((element) => element.text).join("\n").trim();
 }
 
 function saveBlob(blob: Blob, fileName: string) {
@@ -624,26 +1001,117 @@ function groupEditableParagraphs(text: string) {
 }
 
 async function createEditableWord(pages: RecognizedPage[], legacyFont: LegacyFontName, compact = false) {
-  const { AlignmentType, Document, Packer, Paragraph, SectionType, TextRun } = await import("docx");
-  const sections = pages.map((page, pageIndex) => {
-    const editableParagraphs = groupEditableParagraphs(page.text);
-    const children = editableParagraphs.map((paragraph) => {
-      if (!paragraph.text) return new Paragraph({ text: "" });
-      const shouldJustify = paragraph.text.length >= 60;
-      const runs = paragraph.text.split(/(\s+)/).filter(Boolean).map((part) => {
-        const isHindi = containsDevanagari(part);
-        return new TextRun({
-          text: isHindi ? unicodeToKrutiDev(part) : part,
-          font: isHindi ? legacyFont : "Arial",
-          size: isHindi ? (compact ? 24 : 28) : (compact ? 20 : 22),
+  const {
+    AlignmentType,
+    BorderStyle,
+    Document,
+    HeightRule,
+    Packer,
+    Paragraph,
+    SectionType,
+    Table,
+    TableCell,
+    TableLayoutType,
+    TableRow,
+    TextRun,
+    VerticalAlign,
+    WidthType,
+  } = await import("docx");
+  const editableRuns = (text: string, inTable = false, pageFrame = false) => text.split(/(\s+)/).filter(Boolean).map((part) => {
+    const isHindi = containsDevanagari(part);
+    return new TextRun({
+      text: isHindi ? unicodeToKrutiDev(part) : part,
+      font: isHindi ? legacyFont : "Arial",
+      size: isHindi
+        ? (pageFrame ? 32 : (inTable ? (compact ? 19 : 21) : (compact ? 24 : 28)))
+        : (pageFrame ? 26 : (inTable ? (compact ? 17 : 19) : (compact ? 20 : 22))),
+    });
+  });
+  const editableParagraph = (paragraph: { isNumbered: boolean; text: string }) => {
+    if (!paragraph.text) return new Paragraph({ text: "" });
+    return new Paragraph({
+      alignment: paragraph.text.length >= 60 ? AlignmentType.JUSTIFIED : AlignmentType.LEFT,
+      children: editableRuns(paragraph.text),
+      indent: paragraph.isNumbered ? { hanging: 360, left: 360 } : undefined,
+      spacing: { after: compact ? 0 : 60, line: compact ? 260 : 300 },
+    });
+  };
+  const pageWidth = 11906;
+  const pageMargin = compact ? 360 : 720;
+  const usableWidth = pageWidth - pageMargin * 2;
+  const tableBorder = { color: "000000", size: 4, style: BorderStyle.SINGLE };
+  const editableTable = (table: RecognizedTable) => {
+    const approximateWidths = table.columnRatios.map((ratio) => Math.max(180, Math.round(usableWidth * ratio)));
+    const approximateTotal = approximateWidths.reduce((sum, width) => sum + width, 0);
+    const columnWidths = approximateWidths.map((width) => Math.max(180, Math.round(width * usableWidth / approximateTotal)));
+    return new Table({
+      borders: {
+        bottom: tableBorder,
+        insideHorizontal: tableBorder,
+        insideVertical: tableBorder,
+        left: tableBorder,
+        right: tableBorder,
+        top: tableBorder,
+      },
+      columnWidths,
+      layout: TableLayoutType.FIXED,
+      margins: { bottom: 45, left: 70, right: 70, top: 45 },
+      rows: table.rows.map((row, rowIndex) => {
+        let columnIndex = 0;
+        const cells = row.map((cell) => {
+          const width = columnWidths.slice(columnIndex, columnIndex + cell.columnSpan).reduce((sum, value) => sum + value, 0);
+          columnIndex += cell.columnSpan;
+          const lines = cell.text.split(/\n+/u).map((line) => line.trim()).filter(Boolean);
+          const isCompactValue = cell.text.length <= 12 || /^[0-9०-९.,:/()&%+\-\s]+$/u.test(cell.text);
+          return new TableCell({
+            borders: {
+              bottom: tableBorder,
+              left: tableBorder,
+              right: tableBorder,
+              top: tableBorder,
+            },
+            children: (lines.length ? lines : [""]).map((line) => new Paragraph({
+              alignment: table.pageFrame || isCompactValue ? AlignmentType.CENTER : AlignmentType.LEFT,
+              children: editableRuns(line, true, table.pageFrame),
+              spacing: table.pageFrame
+                ? { after: 150, line: 320 }
+                : { after: 0, line: compact ? 210 : 230 },
+            })),
+            columnSpan: cell.columnSpan > 1 ? cell.columnSpan : undefined,
+            verticalAlign: VerticalAlign.CENTER,
+            width: { size: width, type: WidthType.DXA },
+          });
         });
-      });
-      return new Paragraph({
-        alignment: shouldJustify ? AlignmentType.JUSTIFIED : AlignmentType.LEFT,
-        children: runs,
-        indent: paragraph.isNumbered ? { hanging: 360, left: 360 } : undefined,
-        spacing: { after: compact ? 0 : 60, line: compact ? 260 : 300 },
-      });
+        return new TableRow({
+          cantSplit: true,
+          children: cells,
+          height: table.pageFrame ? { rule: HeightRule.ATLEAST, value: 12000 } : undefined,
+          tableHeader: rowIndex === 0 && !table.pageFrame,
+        });
+      }),
+      width: { size: usableWidth, type: WidthType.DXA },
+    });
+  };
+
+  const sections = pages.map((page, pageIndex) => {
+    const children: Array<InstanceType<typeof Paragraph> | InstanceType<typeof Table>> = [];
+    const insertedTables = new Set<number>();
+    const marker = /\[\[TABLE:(\d+)\]\]/gu;
+    let cursor = 0;
+    for (const match of page.text.matchAll(marker)) {
+      const start = match.index ?? 0;
+      children.push(...groupEditableParagraphs(page.text.slice(cursor, start)).map(editableParagraph));
+      const tableIndex = Number(match[1]) - 1;
+      const table = page.tables[tableIndex];
+      if (table && !insertedTables.has(tableIndex)) {
+        children.push(editableTable(table), new Paragraph({ text: "" }));
+        insertedTables.add(tableIndex);
+      }
+      cursor = start + match[0].length;
+    }
+    children.push(...groupEditableParagraphs(page.text.slice(cursor)).map(editableParagraph));
+    page.tables.forEach((table, tableIndex) => {
+      if (!insertedTables.has(tableIndex)) children.push(editableTable(table), new Paragraph({ text: "" }));
     });
 
     return {
@@ -651,9 +1119,7 @@ async function createEditableWord(pages: RecognizedPage[], legacyFont: LegacyFon
         type: pageIndex ? SectionType.NEXT_PAGE : undefined,
         page: {
           size: { width: 11906, height: 16838 },
-          margin: compact
-            ? { top: 360, right: 360, bottom: 360, left: 360 }
-            : { top: 720, right: 720, bottom: 720, left: 720 },
+          margin: { top: pageMargin, right: pageMargin, bottom: pageMargin, left: pageMargin },
         },
       },
       children: children.length ? children : [new Paragraph({ text: "" })],
@@ -680,7 +1146,12 @@ export function HindiKrutidevWorkspace() {
   const [status, setStatus] = useState("File चुनकर Hindi text निकालें।");
   const [error, setError] = useState<string | null>(null);
 
-  const totalCharacters = useMemo(() => pages.reduce((sum, page) => sum + page.text.length, 0), [pages]);
+  const totalCharacters = useMemo(() => pages.reduce((sum, page) => (
+    sum + page.text.length + page.tables.reduce((tableSum, table) => (
+      tableSum + table.rows.reduce((rowSum, row) => rowSum + row.reduce((cellSum, cell) => cellSum + cell.text.length, 0), 0)
+    ), 0)
+  ), 0), [pages]);
+  const totalTables = useMemo(() => pages.reduce((sum, page) => sum + page.tables.length, 0), [pages]);
 
   async function chooseFile(selected: File) {
     setError(null);
@@ -761,11 +1232,19 @@ export function HindiKrutidevWorkspace() {
       for (let index = 0; index < prepared.length; index += 1) {
         const preparedPage = prepared[index];
         if (isPdf && preparedPage.embeddedText) {
+          setStatus(`Page ${index + 1}/${prepared.length} में editable tables पहचानी जा रही हैं…`);
+          const tables = await detectEditableTables(preparedPage.blob, preparedPage.embeddedBlocks, false).catch(() => []);
           recognized.push({
             height: preparedPage.height,
             numericCorrections: 0,
             png: preparedPage.png,
-            text: repairOrderedListNumbers(preparedPage.embeddedText),
+            tables,
+            text: repairOrderedListNumbers(textWithTableMarkers(
+              preparedPage.embeddedBlocks,
+              preparedPage.embeddedText,
+              tables,
+              false,
+            )),
             uncertainNumbers: 0,
             width: preparedPage.width,
           });
@@ -792,13 +1271,14 @@ export function HindiKrutidevWorkspace() {
           numericCorrections = numericResult.corrections;
           uncertainNumbers = numericResult.uncertainNumbers;
         }
-        const extractedText = isPdf
-          ? blockRecognitionText(blocks, result.data.text.trim())
-          : cleanPhotoRecognition(blocks, result.data.text.trim());
+        setStatus(`Page ${index + 1}/${prepared.length} में editable tables पहचानी जा रही हैं…`);
+        const tables = await detectEditableTables(ocrImage, blocks, !isPdf).catch(() => []);
+        const extractedText = textWithTableMarkers(blocks, result.data.text.trim(), tables, !isPdf);
         recognized.push({
           height: preparedPage.height,
           numericCorrections,
           png: preparedPage.png,
+          tables,
           text: repairOrderedListNumbers(extractedText),
           uncertainNumbers,
           width: preparedPage.width,
@@ -808,7 +1288,10 @@ export function HindiKrutidevWorkspace() {
 
       setPages(recognized);
       setProgress(100);
-      setStatus("Hindi text तैयार है। गलतियाँ जाँचकर Word download करें।");
+      const recognizedTables = recognized.reduce((sum, page) => sum + page.tables.length, 0);
+      setStatus(recognizedTables
+        ? `Hindi text और ${recognizedTables} editable table तैयार हैं। जाँचकर Word download करें।`
+        : "Hindi text तैयार है। गलतियाँ जाँचकर Word download करें।");
     } catch (caughtError) {
       setProgress(0);
       setStatus("Hindi text नहीं निकाला जा सका।");
@@ -821,6 +1304,26 @@ export function HindiKrutidevWorkspace() {
 
   function updatePageText(index: number, text: string) {
     setPages((current) => current.map((page, pageIndex) => (pageIndex === index ? { ...page, text } : page)));
+  }
+
+  function updateTableCell(pageIndex: number, tableIndex: number, rowIndex: number, cellIndex: number, text: string) {
+    setPages((current) => current.map((page, currentPageIndex) => {
+      if (currentPageIndex !== pageIndex) return page;
+      return {
+        ...page,
+        tables: page.tables.map((table, currentTableIndex) => {
+          if (currentTableIndex !== tableIndex) return table;
+          return {
+            ...table,
+            rows: table.rows.map((row, currentRowIndex) => (
+              currentRowIndex === rowIndex
+                ? row.map((cell, currentCellIndex) => (currentCellIndex === cellIndex ? { ...cell, text } : cell))
+                : row
+            )),
+          };
+        }),
+      };
+    }));
   }
 
   async function download(type: "kruti" | "devlys" | "both") {
@@ -937,7 +1440,9 @@ export function HindiKrutidevWorkspace() {
                     <p className="text-sm font-extrabold uppercase tracking-[0.14em] text-[#b4552d]">निकला हुआ text</p>
                     <h2 className="mt-1 text-2xl font-black text-slate-950">Text जाँचें और सुधारें</h2>
                   </div>
-                  <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">{pages.length} pages • {totalCharacters} अक्षर</span>
+                  <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">
+                    {pages.length} pages • {totalCharacters} अक्षर{totalTables ? ` • ${totalTables} tables` : ""}
+                  </span>
                 </div>
 
                 <div className="mt-5 space-y-4">
@@ -945,6 +1450,44 @@ export function HindiKrutidevWorkspace() {
                     <div key={index} className="rounded-2xl border border-slate-200 p-4">
                       <label htmlFor={`ocr-page-${index}`} className="font-black text-slate-900">Page {index + 1}</label>
                       <textarea id={`ocr-page-${index}`} value={page.text} onChange={(event) => updatePageText(index, event.target.value)} rows={index === 0 ? 10 : 6} className="mt-3 w-full resize-y rounded-xl border border-slate-300 bg-[#fbfcfc] p-4 font-medium leading-7 text-slate-800 outline-none focus:border-[#2f6a59] focus:ring-4 focus:ring-[#2f6a59]/10" />
+                      {page.tables.length > 0 && (
+                        <div className="mt-4 space-y-4">
+                          <p className="rounded-xl bg-sky-50 px-3 py-2 text-xs font-bold leading-5 text-sky-900">
+                            नीचे की tables Word में वास्तविक editable tables बनेंगी। ऊपर के <code>[[TABLE:n]]</code> चिन्ह न हटाएँ।
+                          </p>
+                          {page.tables.map((table, tableIndex) => (
+                            <div key={tableIndex} className="overflow-x-auto rounded-xl border border-slate-300">
+                              <div className="border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs font-black text-slate-700">
+                                Table {tableIndex + 1}
+                              </div>
+                              <table className="w-full min-w-[640px] table-fixed border-collapse bg-white">
+                                <colgroup>
+                                  {table.columnRatios.map((ratio, columnIndex) => (
+                                    <col key={columnIndex} style={{ width: `${ratio * 100}%` }} />
+                                  ))}
+                                </colgroup>
+                                <tbody>
+                                  {table.rows.map((row, rowIndex) => (
+                                    <tr key={rowIndex}>
+                                      {row.map((cell, cellIndex) => (
+                                        <td key={cellIndex} colSpan={cell.columnSpan} className="border border-slate-300 p-1 align-top">
+                                          <textarea
+                                            aria-label={`Page ${index + 1}, table ${tableIndex + 1}, row ${rowIndex + 1}, cell ${cellIndex + 1}`}
+                                            value={cell.text}
+                                            onChange={(event) => updateTableCell(index, tableIndex, rowIndex, cellIndex, event.target.value)}
+                                            rows={Math.max(1, Math.min(4, cell.text.split("\n").length))}
+                                            className="min-h-9 w-full resize-y rounded-md border-0 bg-transparent px-2 py-1 text-sm leading-5 text-slate-800 outline-none focus:bg-emerald-50"
+                                          />
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       {page.numericCorrections > 0 && (
                         <p className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold leading-5 text-emerald-800">
                           {page.numericCorrections} तारीख/अंक दूसरी जाँच से सुधारे गए हैं।
@@ -962,11 +1505,11 @@ export function HindiKrutidevWorkspace() {
                 <div className="mt-6 grid gap-3 sm:grid-cols-2">
                   <button type="button" onClick={() => download("kruti")} disabled={Boolean(downloadMode)} className="rounded-2xl bg-[#173f35] px-5 py-4 text-left font-black text-white disabled:opacity-50">
                     <span className="block text-lg">Kruti Dev 010 Word</span>
-                    <span className="mt-1 block text-xs font-semibold text-white/65">{downloadMode === "kruti" ? "बन रही है…" : "Editable • Justified paragraphs"}</span>
+                    <span className="mt-1 block text-xs font-semibold text-white/65">{downloadMode === "kruti" ? "बन रही है…" : "Editable text + tables"}</span>
                   </button>
                   <button type="button" onClick={() => download("devlys")} disabled={Boolean(downloadMode)} className="rounded-2xl border border-slate-300 bg-white px-5 py-4 text-left font-black text-slate-950 disabled:opacity-50">
                     <span className="block text-lg">DevLys 010 Word</span>
-                    <span className="mt-1 block text-xs font-semibold text-slate-500">{downloadMode === "devlys" ? "बन रही है…" : "Editable • Justified paragraphs"}</span>
+                    <span className="mt-1 block text-xs font-semibold text-slate-500">{downloadMode === "devlys" ? "बन रही है…" : "Editable text + tables"}</span>
                   </button>
                 </div>
                 <button type="button" onClick={() => download("both")} disabled={Boolean(downloadMode)} className="mt-3 inline-flex min-h-12 w-full items-center justify-center rounded-full bg-[#b4552d] px-6 py-3 font-black text-white transition hover:bg-[#964322] disabled:opacity-50">
@@ -991,6 +1534,7 @@ export function HindiKrutidevWorkspace() {
           <div className="mt-5 space-y-4 text-sm text-slate-600">
             <div className="flex gap-3"><span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#e7f3ee] text-xs font-black text-[#173f35]">1</span><span className="pt-1 leading-5">Kruti Dev 010 में justified Hindi text</span></div>
             <div className="flex gap-3"><span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#e7f3ee] text-xs font-black text-[#173f35]">2</span><span className="pt-1 leading-5">DevLys 010 में वही editable text</span></div>
+            <div className="flex gap-3"><span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#e7f3ee] text-xs font-black text-[#173f35]">3</span><span className="pt-1 leading-5">Grid वाली tables Word में cell-by-cell editable</span></div>
           </div>
         </div>
         <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5 text-sm leading-6 text-amber-900">
