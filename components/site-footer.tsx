@@ -25,6 +25,7 @@ export function SiteFooter() {
             <h2 className="font-extrabold text-white">जानकारी</h2>
             <div className="mt-4 space-y-3 text-white/60">
               <Link className="block hover:text-white" href="/about">हमारे बारे में</Link>
+              <Link className="block hover:text-white" href="/guides">उपयोग मार्गदर्शिका</Link>
               <Link className="block hover:text-white" href="/contact">संपर्क</Link>
               <Link className="block hover:text-white" href="/privacy">गोपनीयता नीति</Link>
               <Link className="block hover:text-white" href="/terms">उपयोग की शर्तें</Link>

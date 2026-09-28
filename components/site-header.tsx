@@ -15,6 +15,7 @@ export function SiteHeader() {
         <nav className="hidden items-center gap-8 text-sm font-semibold text-slate-600 md:flex" aria-label="मुख्य नेविगेशन">
           <Link className="transition hover:text-[#173f35]" href="/#categories">श्रेणियाँ</Link>
           <Link className="transition hover:text-[#173f35]" href="/#tools">सभी टूल्स</Link>
+          <Link className="transition hover:text-[#173f35]" href="/guides">मार्गदर्शिका</Link>
           <Link className="transition hover:text-[#173f35]" href="/about">हमारे बारे में</Link>
         </nav>
 

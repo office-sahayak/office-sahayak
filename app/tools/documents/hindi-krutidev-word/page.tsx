@@ -3,6 +3,7 @@ import Link from "next/link";
 import { HindiKrutidevWorkspace } from "@/components/hindi-krutidev-workspace";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
+import { ToolGuideContent } from "@/components/tool-guide-content";
 
 export const metadata: Metadata = {
   title: "PDF/JPG से Editable Hindi Word File — Office Sahayak",
@@ -36,6 +37,7 @@ export default function HindiKrutidevWordPage() {
 
         <section className="mx-auto w-full max-w-7xl px-5 py-10 sm:px-8 sm:py-14 lg:px-10">
           <HindiKrutidevWorkspace />
+          <ToolGuideContent title="PDF/JPG से Editable Hindi Word" />
         </section>
       </main>
       <SiteFooter />

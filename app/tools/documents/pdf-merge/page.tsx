@@ -3,6 +3,7 @@ import Link from "next/link";
 import { PdfMergeWorkspace } from "@/components/pdf-merge-workspace";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
+import { ToolGuideContent } from "@/components/tool-guide-content";
 
 export const metadata: Metadata = {
   title: "PDF मर्ज — Office Sahayak",
@@ -36,6 +37,7 @@ export default function PdfMergePage() {
 
         <section className="mx-auto w-full max-w-7xl px-5 py-10 sm:px-8 sm:py-14 lg:px-10">
           <PdfMergeWorkspace />
+          <ToolGuideContent title="PDF मर्ज" />
         </section>
       </main>
       <SiteFooter />

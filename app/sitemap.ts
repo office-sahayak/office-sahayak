@@ -2,7 +2,7 @@ import type { MetadataRoute } from "next";
 import { tools } from "@/lib/tools";
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://office-sahayak.onrender.com";
-const staticRoutes = ["", "/about", "/contact", "/privacy", "/terms", "/disclaimer"];
+const staticRoutes = ["", "/guides", "/about", "/contact", "/privacy", "/terms", "/disclaimer"];
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const toolRoutes = tools.map((tool) => `/tools/${tool.category}/${tool.slug}`);

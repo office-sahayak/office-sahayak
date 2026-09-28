@@ -1,4 +1,5 @@
 import { HeroSection } from "@/components/hero-section";
+import { HomeEditorialContent } from "@/components/home-editorial-content";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { StatsStrip } from "@/components/stats-strip";
@@ -13,6 +14,7 @@ export default function Home() {
         <HeroSection />
         <StatsStrip />
         <ToolDirectory categories={categories} tools={tools} />
+        <HomeEditorialContent />
       </main>
       <SiteFooter />
     </>
