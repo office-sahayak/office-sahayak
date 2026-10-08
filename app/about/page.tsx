@@ -28,6 +28,10 @@ export default function AboutPage() {
         <h2>सुरक्षा और पारदर्शिता</h2>
         <p className="mt-3">जहाँ संभव हो, processing आपके browser में होती है। Word और Excel से PDF conversion के लिए file हमारे server पर अस्थायी रूप से process होती है और conversion पूरा होने के बाद उसे स्थायी रूप से संग्रहित नहीं किया जाता। संवेदनशील दस्तावेज़ upload करने से पहले हमारी <Link className="font-bold text-[#173f35] underline" href="/privacy">गोपनीयता नीति</Link> पढ़ें।</p>
       </section>
+      <section>
+        <h2>संपादकीय जिम्मेदारी</h2>
+        <p className="mt-3">हमारे सहायता लेख सामान्य office workflow और tool के practical उपयोग पर लिखे जाते हैं। लेखक, update date, corrections और advertising से जुड़ी प्रक्रिया हमारी <Link className="font-bold text-[#173f35] underline" href="/editorial-policy">संपादकीय नीति</Link> में दी गई है। बदलते सरकारी, वित्तीय या कानूनी नियमों के लिए official source से अंतिम पुष्टि आवश्यक है।</p>
+      </section>
     </InfoPageShell>
   );
 }

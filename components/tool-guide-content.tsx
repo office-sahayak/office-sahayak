@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 interface ToolGuide {
   intro: string;
   steps: string[];
@@ -215,9 +217,41 @@ const guides: Record<string, ToolGuide> = {
   },
 };
 
+const relatedArticles: Record<string, { href: string; label: string }> = {
+  "PDF/JPG से Editable Hindi Word": {
+    href: "/articles/hindi-ocr-accuracy-guide",
+    label: "Hindi OCR की accuracy बढ़ाने की पूरी guide",
+  },
+  "Word से PDF": {
+    href: "/articles/word-to-pdf-table-layout-guide",
+    label: "Word tables और layout सही रखने की पूरी guide",
+  },
+  "Excel से PDF": {
+    href: "/articles/excel-to-pdf-a4-print-guide",
+    label: "Excel को साफ़ A4 PDF बनाने की पूरी guide",
+  },
+  "PDF मर्ज": {
+    href: "/articles/pdf-merge-split-compress-safety-guide",
+    label: "PDF merge, split और compress की safety guide",
+  },
+  "PDF स्प्लिट": {
+    href: "/articles/pdf-merge-split-compress-safety-guide",
+    label: "PDF merge, split और compress की safety guide",
+  },
+  "PDF Compress": {
+    href: "/articles/pdf-merge-split-compress-safety-guide",
+    label: "PDF merge, split और compress की safety guide",
+  },
+  "EMI कैलकुलेटर": {
+    href: "/articles/financial-calculators-verification-guide",
+    label: "EMI और calculator result जाँचने की guide",
+  },
+};
+
 export function ToolGuideContent({ title }: { title: string }) {
   const guide = guides[title];
   if (!guide) return null;
+  const relatedArticle = relatedArticles[title];
 
   return (
     <article className="mt-12 rounded-[2rem] border border-slate-200 bg-white px-6 py-8 shadow-sm sm:px-9 sm:py-10">
@@ -259,6 +293,16 @@ export function ToolGuideContent({ title }: { title: string }) {
           ))}
         </div>
       </section>
+
+      {relatedArticle ? (
+        <aside className="mt-8 rounded-2xl bg-[#173f35] p-5 text-white sm:flex sm:items-center sm:justify-between sm:gap-5">
+          <div>
+            <h3 className="text-lg font-black">और विस्तार से समझें</h3>
+            <p className="mt-1 text-sm leading-6 text-white/70">Common errors, verification और practical checklist सहित अलग सहायता लेख पढ़ें।</p>
+          </div>
+          <Link href={relatedArticle.href} className="mt-4 inline-flex shrink-0 rounded-full bg-white px-5 py-2.5 text-sm font-bold text-[#173f35] sm:mt-0">{relatedArticle.label}</Link>
+        </aside>
+      ) : null}
 
       <p className="mt-8 border-t border-slate-200 pt-5 text-sm leading-6 text-slate-500">
         महत्वपूर्ण file या calculation को submit करने से पहले original record और संबंधित विभाग/सेवा के नियमों से अंतिम जाँच अवश्य करें।

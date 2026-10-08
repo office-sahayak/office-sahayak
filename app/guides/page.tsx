@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { ContentAdsenseScript } from "@/components/content-adsense-script";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 
@@ -87,10 +88,18 @@ export default function GuidesPage() {
             </ul>
           </section>
 
-          <div className="mt-8 text-center"><Link href="/#tools" className="inline-flex min-h-12 items-center justify-center rounded-full bg-[#173f35] px-7 py-3 font-bold text-white">सभी tools देखें</Link></div>
+          <section className="mt-8 rounded-3xl border border-slate-200 bg-white p-6 sm:p-8">
+            <h2 className="text-2xl font-black text-[#173f35]">किसी खास समस्या की विस्तृत मदद चाहिए?</h2>
+            <p className="mt-3 leading-8 text-slate-600">Word table, Excel A4 print, Hindi OCR, Kruti Dev, PDF safety और portal upload पर अलग-अलग उदाहरण सहित सहायता लेख उपलब्ध हैं।</p>
+            <div className="mt-5 flex flex-wrap gap-3">
+              <Link href="/articles" className="inline-flex min-h-12 items-center justify-center rounded-full bg-[#173f35] px-7 py-3 font-bold text-white">सहायता लेख पढ़ें</Link>
+              <Link href="/#tools" className="inline-flex min-h-12 items-center justify-center rounded-full border border-[#173f35] px-7 py-3 font-bold text-[#173f35]">सभी tools देखें</Link>
+            </div>
+          </section>
         </div>
       </main>
       <SiteFooter />
+      <ContentAdsenseScript />
     </>
   );
 }
