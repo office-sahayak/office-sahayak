@@ -4,7 +4,7 @@ import { FormEvent, useState } from "react";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 
-type Result = { societyName: string; auditorName: string | null; registrationNumber: string };
+type Result = { societyName: string; auditorName: string | null; mobileNumber: string | null; registrationNumber: string };
 type Contact = { auditorName: string; designation: string | null; mobileNumber: string };
 
 export default function AuditorLookupPage() {
@@ -51,7 +51,7 @@ export default function AuditorLookupPage() {
     e.preventDefault();
     setContacts([]);
     setContactMessage("");
-    if (auditorName.trim().length < 4) { setContactMessage("कृपया ऑडिटर का पूरा नाम लिखें।"); return; }
+    if (auditorName.trim().length < 3) { setContactMessage("कृपया ऑडिटर का पूरा नाम लिखें।"); return; }
     setContactLoading(true);
     try {
       const response = await fetch("/api/auditor-contact", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ auditorName: auditorName.trim() }), cache: "no-store" });
@@ -84,15 +84,16 @@ export default function AuditorLookupPage() {
                 <div><span className="block text-xs text-slate-500">पंजीयन क्रमांक</span><strong className="text-slate-900">{result.registrationNumber}</strong></div>
                 <div><span className="block text-xs text-slate-500">संस्था का नाम</span><strong className="text-slate-900">{result.societyName}</strong></div>
                 <div><span className="block text-xs text-slate-500">आवंटित ऑडिटर</span><strong className="text-slate-900">{result.auditorName || "नाम उपलब्ध नहीं — कार्यालय से पुष्टि करें"}</strong></div>
+                {result.mobileNumber && <div><span className="block text-xs text-slate-500">ऑडिटर का मोबाइल नंबर</span><a href={`tel:${result.mobileNumber.replace(/[^+0-9]/g, "")}`} className="font-semibold text-[#17624d] underline underline-offset-4">{result.mobileNumber} (कॉल करें)</a></div>}
               </div>
             ))}
           </section>}
           <section className="mt-10 border-t border-slate-200 pt-8">
             <h2 className="text-xl font-bold text-slate-900">ऑडिटर संपर्क खोजें</h2>
-            <p className="mt-2 text-sm text-slate-600">ऑडिटर का पूरा अंग्रेजी नाम दर्ज करें। केवल उसी नाम से जुड़े संपर्क दिखाई देंगे।</p>
+            <p className="mt-2 text-sm text-slate-600">ऑडिटर का हिंदी या अंग्रेजी नाम (या नाम का एक हिस्सा) दर्ज करें। संबंधित संपर्क दिखाई देंगे।</p>
             <form onSubmit={searchContacts} className="mt-4 space-y-3">
               <label htmlFor="auditor-name" className="block text-sm font-bold text-slate-800">ऑडिटर का नाम</label>
-              <input id="auditor-name" autoComplete="off" value={auditorName} onChange={e => setAuditorName(e.target.value)} placeholder="जैसे: SHYAM CHOUHAN" maxLength={100} className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-lg text-slate-950" />
+              <input id="auditor-name" autoComplete="off" value={auditorName} onChange={e => setAuditorName(e.target.value)} placeholder="जैसे: कविता या KAVITA" maxLength={100} className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-lg text-slate-950" />
               <button type="submit" disabled={contactLoading} className="w-full rounded-xl bg-[#173f35] px-5 py-3 font-semibold text-white disabled:opacity-60">{contactLoading ? "खोज रहे हैं…" : "ऑडिटर का मोबाइल नंबर खोजें"}</button>
             </form>
             {contactMessage && <p role="status" className="mt-4 rounded-xl bg-amber-50 p-4 text-sm text-amber-900">{contactMessage}</p>}
