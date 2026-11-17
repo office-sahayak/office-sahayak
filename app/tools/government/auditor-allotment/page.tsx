@@ -22,8 +22,8 @@ export default function AuditorLookupPage() {
     setResults([]);
     setMessage("");
     const query = number.trim().replace(/[०-९]/g, digit => String("०१२३४५६७८९".indexOf(digit)));
-    if (!/^\d{1,12}$/.test(query)) {
-      setMessage("कृपया केवल पंजीयन क्रमांक के अंक दर्ज करें।");
+    if (!/^[0-9]{1,12}(?:\/[0-9]{1,6})?$/.test(query)) {
+      setMessage("कृपया पंजीयन क्रमांक दर्ज करें; 1773/96 जैसे क्रमांक भी स्वीकार हैं।");
       return;
     }
     setLoading(true);
@@ -72,7 +72,7 @@ export default function AuditorLookupPage() {
           <p className="mt-3 text-sm leading-7 text-slate-600">पंजीयन क्रमांक डालकर संबंधित सभी संस्थाओं के नाम और आवंटित ऑडिटर देखें। एक ही नंबर पर कई संस्थाएँ हों, तो सभी परिणाम दिखेंगे। पूरी आवंटन सूची यहाँ उपलब्ध नहीं है।</p>
           <form onSubmit={search} className="mt-8 space-y-3">
             <label htmlFor="registration" className="block text-sm font-bold text-slate-800">पंजीयन क्रमांक</label>
-            <input id="registration" autoComplete="off" inputMode="numeric" value={number} onChange={e => setNumber(e.target.value)} placeholder="जैसे: 2825" maxLength={12} className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-lg text-slate-950" />
+            <input id="registration" autoComplete="off" inputMode="numeric" value={number} onChange={e => setNumber(e.target.value)} placeholder="जैसे: 2825" maxLength={19} className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-lg text-slate-950" />
             <button disabled={loading} type="submit" className="w-full rounded-xl bg-[#173f35] px-5 py-3 font-semibold text-white disabled:opacity-60">{loading ? "खोज रहे हैं…" : "खोजें"}</button>
           </form>
           {message && <p role="status" className="mt-6 rounded-xl bg-amber-50 p-4 text-sm text-amber-900">{message}</p>}
