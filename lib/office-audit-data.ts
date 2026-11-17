@@ -35,3 +35,13 @@ export function normalizeAuditor(text: string) {
     .replace(/^(श्रीमती|सुश्री|श्री)\s*/, "")
     .toUpperCase();
 }
+
+/** Return a contact only when the auditor name identifies exactly one row. */
+export function findAuditorContact(auditorName: string, contacts: AuditData["c"]) {
+  const name = normalizeAuditor(auditorName);
+  if (!name) return null;
+  const matches = contacts.filter(c =>
+    [c[0], c[3] || ""].some(alias => alias && normalizeAuditor(alias) === name)
+  );
+  return matches.length === 1 ? matches[0] : null;
+}
