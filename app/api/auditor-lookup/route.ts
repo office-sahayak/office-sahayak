@@ -34,17 +34,33 @@ export async function POST(request: NextRequest) {
     const endpoint = new URL("/rest/v1/auditor_allotment", url);
     endpoint.searchParams.set("select", "registration_number,society_name,auditor_name");
     endpoint.searchParams.set("registration_number", "eq." + registrationNumber);
-    endpoint.searchParams.set("limit", "2");
-    const res = await fetch(endpoint, {
-      headers: { apikey: key, Authorization: "Bearer " + key, Accept: "application/json" },
-      cache: "no-store",
-      signal: AbortSignal.timeout(8000)
-    });
-    if (!res.ok) throw new Error("lookup failed");
-    const rows = await res.json() as Array<{ registration_number: string; society_name: string; auditor_name: string | null }>;
+    endpoint.searchParams.set("order", "id.asc");
+    const rows: Array<{ registration_number: string; society_name: string; auditor_name: string | null }> = [];
+    const batchSize = 500;
+    let offset = 0;
+    while (true) {
+      endpoint.searchParams.set("limit", String(batchSize));
+      endpoint.searchParams.set("offset", String(offset));
+      const res = await fetch(endpoint, {
+        headers: { apikey: key, Authorization: "Bearer " + key, Accept: "application/json" },
+        cache: "no-store",
+        signal: AbortSignal.timeout(8000)
+      });
+      if (!res.ok) throw new Error("lookup failed");
+      const batch = await res.json() as typeof rows;
+      rows.push(...batch);
+      if (batch.length < batchSize) break;
+      offset += batchSize;
+    }
     if (rows.length === 0) return reply({ found: false, message: "इस पंजीयन क्रमांक की संस्था नहीं मिली। कृपया अंक जाँचें।" }, 404);
-    if (rows.length > 1) return reply({ found: false, message: "इस पंजीयन क्रमांक पर एक से अधिक रिकॉर्ड हैं। कार्यालय से पुष्टि करें।" }, 409);
-    return reply({ found: true, result: { registrationNumber: rows[0].registration_number, societyName: rows[0].society_name, auditorName: rows[0].auditor_name } });
+    return reply({
+      found: true,
+      results: rows.map(row => ({
+        registrationNumber: row.registration_number,
+        societyName: row.society_name,
+        auditorName: row.auditor_name
+      }))
+    });
   } catch {
     return reply({ message: "खोज सेवा अभी उपलब्ध नहीं है।" }, 503);
   }
