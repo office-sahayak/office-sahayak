@@ -15,3 +15,9 @@ Private exact registration-number lookup, route: `/tools/government/auditor-allo
 Security note: Rate limiting is best-effort in-memory only and is not globally shared across serverless instances. Before a large public launch, add managed distributed IP / bot rate-limiting and log monitoring. An exact-number public lookup prevents bulk UI download but does **not** mathematically prevent determined enumeration. If stronger privacy is required, use one-time PIN/OTP or authenticated access.
 
 Output displays all matching institutions and their auditors for the exact queried registration number; no browse/list/export API.
+
+## Auditor contact search (requires consent before publishing)
+
+The uploaded `emp(1).xlsx` has 23 auditor records. A private normalized CSV was prepared locally, with columns `employee_code,auditor_name,name_key,designation,mobile_number`. The CSV deliberately is **not** committed to the public repository. Verify authority/consent to disclose each person's mobile number publicly before import.
+
+Run `docs/auditor-contact-schema.sql` in the same private Supabase project, then upload the CSV through the authenticated dashboard, not through GitHub or `public/`. The existing server-only Supabase environment settings serve both search endpoints. The site has a separate full-name contact lookup and click-to-call link. Without configured private data, search returns a service-unavailable message. Consider CAPTCHA or managed rate-limiting before public exposure, because exact-name lookups can still be enumerated.
