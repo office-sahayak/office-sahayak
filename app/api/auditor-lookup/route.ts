@@ -23,8 +23,8 @@ export async function POST(request: NextRequest) {
   let input: unknown;
   try { input = await request.json(); } catch { return reply({ message: "अमान्य अनुरोध।" }, 400); }
   const registrationNumber = (input as { registrationNumber?: unknown })?.registrationNumber;
-  if (typeof registrationNumber !== "string" || !/^\d{1,12}$/.test(registrationNumber)) {
-    return reply({ message: "केवल पंजीयन क्रमांक के अंक लिखें।" }, 400);
+  if (typeof registrationNumber !== "string" || !/^[0-9]{1,12}(?:\/[0-9]{1,6})?$/.test(registrationNumber)) {
+    return reply({ message: "पंजीयन क्रमांक अंक में लिखें; जरूरत होने पर 1773/96 जैसा क्रमांक भी दर्ज कर सकते हैं।" }, 400);
   }
   const url = process.env.AUDITOR_SUPABASE_URL;
   const key = process.env.AUDITOR_SUPABASE_SERVICE_ROLE_KEY;
