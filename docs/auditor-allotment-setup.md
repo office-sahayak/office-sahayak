@@ -21,3 +21,7 @@ Output displays all matching institutions and their auditors for the exact queri
 The uploaded `emp(1).xlsx` has 23 auditor records. A private normalized CSV was prepared locally, with columns `employee_code,auditor_name,name_key,designation,mobile_number`. The CSV deliberately is **not** committed to the public repository. Verify authority/consent to disclose each person's mobile number publicly before import.
 
 Run `docs/auditor-contact-schema.sql` in the same private Supabase project, then upload the CSV through the authenticated dashboard, not through GitHub or `public/`. The existing server-only Supabase environment settings serve both search endpoints. The site has a separate full-name contact lookup and click-to-call link. Without configured private data, search returns a service-unavailable message. Consider CAPTCHA or managed rate-limiting before public exposure, because exact-name lookups can still be enumerated.
+
+## Verification hold for 17-11-2026(1).xlsx
+
+The latest user-supplied workbook contains 3,264 society rows. Registration number is absent from one row and one number has slash format (1773/96). Duplicate registration numbers must be retained. All 23 auditor names occur 141-142 times each, an unusually uniform mapping; **auditor assignments must be verified against the original allotment orders before publication**. Do not deploy or import this spreadsheet as verified source of truth yet. A staging CSV exists only as a conversation artifact and is not part of this public repository.
