@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPrivateAuditData, normalizeRegistration } from "@/lib/office-audit-data";
+import { getPrivateAuditData, normalizeRegistration, findAuditorContact } from "@/lib/office-audit-data";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,7 +31,14 @@ export async function POST(request: NextRequest) {
   if (!data) return reply({ message: "आवंटन डेटा अभी सर्वर पर उपलब्ध नहीं है।" }, 503);
   const matches = data.s.filter(row => normalizeRegistration(row[0]) === normalizeRegistration(registrationNumber));
   if (!matches.length) return reply({ found: false, message: "इस पंजीयन क्रमांक पर कोई संस्था नहीं मिली।" }, 404);
-  return reply({ found: true, results: matches.map(row => ({
-    registrationNumber: row[0], societyName: row[1], auditorName: data.a[row[2]] || null
-  })) });
+  return reply({ found: true, results: matches.map(row => {
+    const auditorName = data.a[row[2]] || null;
+    const contact = auditorName ? findAuditorContact(auditorName, data.c) : null;
+    return {
+      registrationNumber: row[0],
+      societyName: row[1],
+      auditorName,
+      mobileNumber: contact?.[2] || null,
+    };
+  }) });
 }
