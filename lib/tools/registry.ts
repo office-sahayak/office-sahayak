@@ -10,6 +10,15 @@
 import type { Tool } from "./types";
 
 export const tools: Tool[] = [
+  {
+    slug: "auditor-allotment",
+    name: "\u0905\u0902\u0915\u0947\u0915\u094d\u0937\u0923 \u0906\u0935\u0902\u091f\u0928 \u0914\u0930 \u0911\u0921\u093f\u091f\u0930 \u0938\u0902\u092a\u0930\u094d\u0915",
+    description: "\u092a\u0902\u091c\u0940\u092f\u0928 \u0915\u094d\u0930\u092e\u093e\u0902\u0915 \u0938\u0947 \u0938\u0902\u0938\u094d\u0925\u093e \u0914\u0930 \u0911\u0921\u093f\u091f\u0930 \u0916\u094b\u091c\u0947\u0902",
+    category: "government",
+    icon: "\uD83D\uDD0E",
+    status: "available",
+    keywords: ["auditor", "audit", "allotment", "2025-26", "\u092a\u0902\u091c\u0940\u092f\u0928", "\u0911\u0921\u093f\u091f\u0930"],
+  },
   // DOCUMENTS
   {
     slug: "hindi-krutidev-word",
