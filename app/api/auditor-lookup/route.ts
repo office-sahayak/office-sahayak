@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getPrivateAuditData, normalizeRegistration } from "@/lib/office-audit-data";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,42 +27,11 @@ export async function POST(request: NextRequest) {
   if (typeof registrationNumber !== "string" || !/^[0-9]{1,12}(?:\/[0-9]{1,6})?$/.test(registrationNumber)) {
     return reply({ message: "पंजीयन क्रमांक अंक में लिखें; जरूरत होने पर 1773/96 जैसा क्रमांक भी दर्ज कर सकते हैं।" }, 400);
   }
-  const url = process.env.AUDITOR_SUPABASE_URL;
-  const key = process.env.AUDITOR_SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) return reply({ message: "यह सेवा अभी तैयार की जा रही है।" }, 503);
-
-  try {
-    const endpoint = new URL("/rest/v1/auditor_allotment", url);
-    endpoint.searchParams.set("select", "registration_number,society_name,auditor_name");
-    endpoint.searchParams.set("registration_number", "eq." + registrationNumber);
-    endpoint.searchParams.set("order", "id.asc");
-    const rows: Array<{ registration_number: string; society_name: string; auditor_name: string | null }> = [];
-    const batchSize = 500;
-    let offset = 0;
-    while (true) {
-      endpoint.searchParams.set("limit", String(batchSize));
-      endpoint.searchParams.set("offset", String(offset));
-      const res = await fetch(endpoint, {
-        headers: { apikey: key, Authorization: "Bearer " + key, Accept: "application/json" },
-        cache: "no-store",
-        signal: AbortSignal.timeout(8000)
-      });
-      if (!res.ok) throw new Error("lookup failed");
-      const batch = await res.json() as typeof rows;
-      rows.push(...batch);
-      if (batch.length < batchSize) break;
-      offset += batchSize;
-    }
-    if (rows.length === 0) return reply({ found: false, message: "इस पंजीयन क्रमांक की संस्था नहीं मिली। कृपया अंक जाँचें।" }, 404);
-    return reply({
-      found: true,
-      results: rows.map(row => ({
-        registrationNumber: row.registration_number,
-        societyName: row.society_name,
-        auditorName: row.auditor_name
-      }))
-    });
-  } catch {
-    return reply({ message: "खोज सेवा अभी उपलब्ध नहीं है।" }, 503);
-  }
+  const data = getPrivateAuditData();
+  if (!data) return reply({ message: "आवंटन डेटा अभी सर्वर पर उपलब्ध नहीं है।" }, 503);
+  const matches = data.s.filter(row => normalizeRegistration(row[0]) === normalizeRegistration(registrationNumber));
+  if (!matches.length) return reply({ found: false, message: "इस पंजीयन क्रमांक पर कोई संस्था नहीं मिली।" }, 404);
+  return reply({ found: true, results: matches.map(row => ({
+    registrationNumber: row[0], societyName: row[1], auditorName: data.a[row[2]] || null
+  })) });
 }
