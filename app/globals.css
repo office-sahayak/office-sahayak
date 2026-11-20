@@ -100,3 +100,11 @@ input:focus-visible {
 .word-pdf-preview-original {
   font-synthesis: none;
 }
+
+@media print {
+  .jagrati-page { background: white; color: black; }
+  .jagrati-page .jagrati-record + .jagrati-record { break-before: page; }
+  .jagrati-page .jagrati-record h2,
+  .jagrati-page .jagrati-record h3 { break-after: avoid; }
+  .jagrati-page .jagrati-record dl > div { break-inside: avoid; }
+}

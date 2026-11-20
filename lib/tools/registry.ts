@@ -11,6 +11,15 @@ import type { Tool } from "./types";
 
 export const tools: Tool[] = [
   {
+    slug: "jagrati-plot-search",
+    name: "जागृति — भूखंड की जानकारी",
+    description: "भूखंड क्रमांक से सदस्य, रजिस्ट्री और पूरा विवरण खोजें",
+    category: "government",
+    icon: "⌂",
+    status: "available",
+    keywords: ["jagrati", "jagriti", "plot", "bhukhand", "जागृति", "भूखंड", "भूखण्ड", "रजिस्ट्री"],
+  },
+  {
     slug: "auditor-allotment",
     name: "\u0905\u0902\u0915\u0947\u0915\u094d\u0937\u0923 \u0906\u0935\u0902\u091f\u0928 \u0914\u0930 \u0911\u0921\u093f\u091f\u0930 \u0938\u0902\u092a\u0930\u094d\u0915",
     description: "\u092a\u0902\u091c\u0940\u092f\u0928 \u0915\u094d\u0930\u092e\u093e\u0902\u0915 \u0938\u0947 \u0938\u0902\u0938\u094d\u0925\u093e \u0914\u0930 \u0911\u0921\u093f\u091f\u0930 \u0916\u094b\u091c\u0947\u0902",

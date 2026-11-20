@@ -6,7 +6,7 @@ const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://office-sahayak.onre
 const staticRoutes = ["", "/articles", "/guides", "/about", "/contact", "/privacy", "/terms", "/disclaimer", "/editorial-policy"];
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const toolRoutes = tools.map((tool) => `/tools/${tool.category}/${tool.slug}`);
+  const toolRoutes = tools.filter(tool => tool.slug !== "jagrati-plot-search").map((tool) => `/tools/${tool.category}/${tool.slug}`);
   const articleRoutes = articles.map((article) => `/articles/${article.slug}`);
 
   return [...staticRoutes, ...articleRoutes, ...toolRoutes].map((route, index) => ({
